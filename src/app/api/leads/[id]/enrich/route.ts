@@ -3,7 +3,8 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { processLogo, validateLogoCandidate, fetchGoogleFavicon, generateInitialsLogo } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
-import { extractPalette, derivePassColors, adjustBgForContrast } from '@/lib/enrichment/colors'
+import { extractPalette, derivePassColors, adjustBgForContrast, isBoringColor } from '@/lib/enrichment/colors'
+import { pickBrandColors } from '@/lib/enrichment/color-picker'
 import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGmapsPhoto, cropToSquare } from '@/lib/enrichment/gmaps-photo'
 import { classifyIndustry, classifyBusiness, generateCreativeContent } from '@/lib/ai/classifier'
@@ -118,13 +119,19 @@ export async function POST(
       ? new URL(lead.website_url).hostname.replace(/^www\./, '')
       : null
 
-    // 3a. Brandfetch
+    // 3a. Brandfetch (but skip lettermarks — they're generic)
+    let brandfetchBuffer: Buffer | null = null
+    let brandfetchSource: string | null = null
     if (domain) {
       try {
         const bf = await fetchBrandfetchLogo(domain)
         if (bf) {
-          logoBuffer = bf.buffer
-          logoSource = bf.source
+          if (bf.source === 'brandfetch-lettermark') {
+            console.log('[Enrich] Brandfetch returned lettermark, skipping')
+          } else {
+            brandfetchBuffer = bf.buffer
+            brandfetchSource = bf.source
+          }
         }
       } catch (err) {
         console.error('Brandfetch failed (non-fatal):', err)
@@ -132,7 +139,10 @@ export async function POST(
     }
 
     // 3b. Website Scraping Logo (with AI Picker)
-    if (!logoBuffer && scrapeResult?.logoCandidates?.length) {
+    // Prefer website logo if strong signal (score >= 90), otherwise try it when no Brandfetch
+    const hasStrongWebsiteLogo = scrapeResult?.bestLogo && scrapeResult.bestLogo.score >= 90
+
+    if ((hasStrongWebsiteLogo || !brandfetchBuffer) && scrapeResult?.logoCandidates?.length) {
       const sortedCandidates = [...scrapeResult.logoCandidates]
         .sort((a: { score: number }, b: { score: number }) => b.score - a.score)
 
@@ -191,6 +201,12 @@ export async function POST(
           }
         }
       }
+    }
+
+    // 3b2. Brandfetch real logo as fallback (if website didn't yield a logo)
+    if (!logoBuffer && brandfetchBuffer) {
+      logoBuffer = brandfetchBuffer
+      logoSource = brandfetchSource!
     }
 
     // 3c. GMaps Featured Image
@@ -253,23 +269,20 @@ export async function POST(
     }
 
     // ─── 4. COLOR WATERFALL ─────────────────────────────────
+    // 1. AI Color Picker (Haiku Vision) — looks at logo + CSS candidates
+    // 2. CSS Brand Colors — only if colorful (not black/gray/white)
+    // 3. Logo Palette (node-vibrant) — smart swatch selection
+    // 4. GMaps photo palette
+    // 5. Industry Default
+    // 6. Fallback #1a1a2e
 
     let bgHex: string | null = null
     let accentHex: string | null = null
 
-    // 4a. CSS Brand Colors
-    if (scrapeResult && scrapeResult.brandColors && scrapeResult.brandColors.confidence >= 0.6 && scrapeResult.brandColors.backgroundColor) {
-      bgHex = scrapeResult.brandColors.backgroundColor
-      accentHex = scrapeResult.brandColors.accentColor
-    }
-
-    // 4b. node-vibrant from logo
-    if (!bgHex && logoBuffer) {
+    // Always extract vibrant palette from logo (needed for fallback + extra_data)
+    if (logoBuffer) {
       try {
         const palette = await extractPalette(logoBuffer)
-        bgHex = palette.dominant
-        accentHex = palette.accent
-
         // Store full palette in extra_data
         const extra = (updateData.extra_data as Record<string, unknown>) || existingExtra
         updateData.extra_data = { ...extra, vibrant_swatches: palette.swatches }
@@ -278,21 +291,65 @@ export async function POST(
       }
     }
 
-    // 4c. node-vibrant from GMaps photo
+    // 4a. AI Color Picker (Haiku Vision)
+    if (logoBuffer) {
+      try {
+        const aiColors = await pickBrandColors(
+          logoBuffer,
+          {
+            title: scrapeResult?.title ?? lead.business_name,
+            description: scrapeResult?.description ?? lead.website_description,
+            themeColor: scrapeResult?.themeColor ?? null,
+          },
+          scrapeResult?.brandColors?.candidates || [],
+        )
+        if (aiColors && aiColors.confidence >= 0.7) {
+          bgHex = aiColors.background
+          accentHex = aiColors.accent
+        }
+      } catch (err) {
+        console.error('AI Color Picker failed (non-fatal):', err)
+      }
+    }
+
+    // 4b. CSS Brand Colors (only if colorful)
+    if (!bgHex && scrapeResult && scrapeResult.brandColors && (scrapeResult.brandColors.confidence ?? 0) >= 0.6 && scrapeResult.brandColors.backgroundColor) {
+      if (!isBoringColor(scrapeResult.brandColors.backgroundColor)) {
+        bgHex = scrapeResult.brandColors.backgroundColor
+        accentHex = scrapeResult.brandColors.accentColor
+      }
+    }
+
+    // 4c. node-vibrant from logo (only if colorful)
+    if (!bgHex && logoBuffer) {
+      try {
+        const palette = await extractPalette(logoBuffer)
+        if (!isBoringColor(palette.dominant)) {
+          bgHex = palette.dominant
+          accentHex = palette.accent
+        }
+      } catch (err) {
+        console.error('Vibrant extraction failed (non-fatal):', err)
+      }
+    }
+
+    // 4d. node-vibrant from GMaps photo
     if (!bgHex && lead.gmaps_photos?.length > 0) {
       try {
         const photo = await fetchGmapsPhoto(lead.gmaps_photos[0])
         if (photo) {
           const palette = await extractPalette(photo)
-          bgHex = palette.dominant
-          accentHex = palette.accent
+          if (!isBoringColor(palette.dominant)) {
+            bgHex = palette.dominant
+            accentHex = palette.accent
+          }
         }
       } catch (err) {
         console.error('GMaps photo color extraction failed (non-fatal):', err)
       }
     }
 
-    // 4d. Industry default
+    // 4e. Industry default
     if (!bgHex) {
       bgHex = industryDefaults?.default_color || '#1a1a2e'
       accentHex = industryDefaults?.default_accent || null

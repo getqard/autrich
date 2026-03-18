@@ -3,7 +3,8 @@ import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
-import { extractPalette } from '@/lib/enrichment/colors'
+import { pickBrandColors } from '@/lib/enrichment/color-picker'
+import { extractPalette, isBoringColor, hexLuminance } from '@/lib/enrichment/colors'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import { INDUSTRIES } from '@/data/industries-seed'
 
@@ -40,15 +41,26 @@ export async function POST(request: NextRequest) {
       // Extract domain
       const domain = new URL(url).hostname.replace(/^www\./, '')
 
-      // 1. Brandfetch
+      // 1. Brandfetch (but skip lettermarks — they're generic)
+      let brandfetchBuffer: Buffer | null = null
+      let brandfetchSource: string | null = null
       const bf = await fetchBrandfetchLogo(domain)
       if (bf) {
-        logoBuffer = bf.buffer
-        logoSource = bf.source
+        if (bf.source === 'brandfetch-lettermark') {
+          // Lettermark = generic fallback, skip for now
+          console.log('[Scrape] Brandfetch returned lettermark, skipping')
+        } else {
+          brandfetchBuffer = bf.buffer
+          brandfetchSource = bf.source
+        }
       }
 
       // 2. Website logo — AI Picker or score-based fallback
-      if (!logoBuffer && result.logoCandidates?.length) {
+      // If website has a strong logo (score >= 90), prefer it over Brandfetch
+      const hasStrongWebsiteLogo = result.bestLogo && result.bestLogo.score >= 90
+
+      // Try website logo if strong signal OR no Brandfetch real logo
+      if ((hasStrongWebsiteLogo || !brandfetchBuffer) && result.logoCandidates?.length) {
         let pickedUrl: string | null = null
 
         // Try AI Logo Picker if multiple candidates + business_name available
@@ -99,6 +111,12 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // 2b. Brandfetch real logo as fallback (if website didn't yield a logo)
+      if (!logoBuffer && brandfetchBuffer) {
+        logoBuffer = brandfetchBuffer
+        logoSource = brandfetchSource!
+      }
+
       // 3. Google Favicon
       if (!logoBuffer) {
         const fav = await fetchGoogleFavicon(domain)
@@ -114,13 +132,54 @@ export async function POST(request: NextRequest) {
         logoSource = 'generated'
       }
 
-      // Colors from logo
+      // ─── COLOR WATERFALL ──────────────────────────────────
+      // 1. AI Color Picker (Haiku Vision) — looks at logo + CSS candidates
+      // 2. CSS Brand Colors — only if colorful (not black/gray/white)
+      // 3. Logo Palette (node-vibrant) — smart swatch selection
+      // 4. Industry Default
+      // 5. Fallback #1a1a2e
+
       let colors: EnrichmentColors = null
+      let passPreviewBg: string | null = null
+      let passPreviewAccent: string | null = null
+
+      // Extract vibrant palette from logo (needed for fallback even if AI succeeds)
       if (logoBuffer) {
         try {
           const palette = await extractPalette(logoBuffer)
           colors = palette
         } catch { /* non-fatal */ }
+      }
+
+      // Step 1: AI Color Picker
+      if (logoBuffer) {
+        try {
+          const aiColors = await pickBrandColors(
+            logoBuffer,
+            { title: result.title, description: result.description, themeColor: result.themeColor },
+            result.brandColors?.candidates || [],
+          )
+          if (aiColors && aiColors.confidence >= 0.7) {
+            passPreviewBg = aiColors.background
+            passPreviewAccent = aiColors.accent
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // Step 2: CSS Brand Colors (only if colorful)
+      if (!passPreviewBg && result.brandColors?.confidence >= 0.6 && result.brandColors.backgroundColor) {
+        if (!isBoringColor(result.brandColors.backgroundColor)) {
+          passPreviewBg = result.brandColors.backgroundColor
+          passPreviewAccent = result.brandColors.accentColor
+        }
+      }
+
+      // Step 3: Logo palette (node-vibrant)
+      if (!passPreviewBg && colors?.dominant) {
+        if (!isBoringColor(colors.dominant)) {
+          passPreviewBg = colors.dominant
+          passPreviewAccent = colors.accent
+        }
       }
 
       // Industry mapping
@@ -139,17 +198,24 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // Step 4: Industry default
+      if (!passPreviewBg && industry) {
+        const ind = INDUSTRIES.find(i => i.slug === industry!.slug)
+        if (ind?.default_color) {
+          passPreviewBg = ind.default_color
+        }
+      }
+
+      // Step 5: Fallback
+      const bgColor = passPreviewBg || '#1a1a2e'
+
       // Pass preview colors
       let passPreview: EnrichmentPassPreview = null
-      const bgColor = (result.brandColors?.confidence >= 0.6 && result.brandColors.backgroundColor)
-        ? result.brandColors.backgroundColor
-        : colors?.dominant || (industry ? INDUSTRIES.find(i => i.slug === industry!.slug)?.default_color : null) || '#1a1a2e'
-
       const lum = hexLuminance(bgColor)
       passPreview = {
         bg: bgColor,
         text: lum > 0.5 ? '#000000' : '#ffffff',
-        label: lum > 0.5 ? '#333333' : '#bbbbbb',
+        label: passPreviewAccent || (lum > 0.5 ? '#333333' : '#bbbbbb'),
       }
 
       enrichmentPreview = {
@@ -171,10 +237,3 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function hexLuminance(hex: string): number {
-  const h = hex.replace('#', '')
-  const r = parseInt(h.substring(0, 2), 16)
-  const g = parseInt(h.substring(2, 4), 16)
-  const b = parseInt(h.substring(4, 6), 16)
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255
-}

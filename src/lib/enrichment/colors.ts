@@ -27,15 +27,32 @@ export async function extractPalette(imageBuffer: Buffer): Promise<PaletteResult
     }
   }
 
-  // Dominant: DarkVibrant → DarkMuted → Muted → first available
-  const dominant =
-    palette.DarkVibrant?.hex ??
-    palette.DarkMuted?.hex ??
-    palette.Muted?.hex ??
-    swatches[0]?.hex ??
-    '#1a1a2e'
+  // Dominant (for pass background — we want dark but NOT near-black):
+  // 1. DarkVibrant — if present AND not near-black (often too dark)
+  // 2. Muted — often the best brand color, calm but recognizable
+  // 3. DarkMuted — darker alternative
+  // 4. Vibrant — darken by 20% for pass suitability
+  // 5. first available / fallback
+  let dominant: string | null = null
 
-  // Accent: Vibrant → LightVibrant → null
+  if (palette.DarkVibrant && !isBoringColor(palette.DarkVibrant.hex)) {
+    dominant = palette.DarkVibrant.hex
+  }
+  if (!dominant && palette.Muted && !isBoringColor(palette.Muted.hex)) {
+    dominant = palette.Muted.hex
+  }
+  if (!dominant && palette.DarkMuted && !isBoringColor(palette.DarkMuted.hex)) {
+    dominant = palette.DarkMuted.hex
+  }
+  if (!dominant && palette.Vibrant) {
+    // Darken vibrant by 20% to make it pass-suitable
+    dominant = darkenColor(palette.Vibrant.hex, 0.2)
+  }
+  if (!dominant) {
+    dominant = swatches[0]?.hex ?? '#1a1a2e'
+  }
+
+  // Accent: Vibrant (loudest color) → LightVibrant → null
   const accent = palette.Vibrant?.hex ?? palette.LightVibrant?.hex ?? null
 
   // Text & label colors via WCAG
@@ -67,9 +84,41 @@ export async function extractColors(imageBuffer: Buffer): Promise<{
 
 // ─── Utility Functions ──────────────────────────────────────
 
-function hexLuminance(hex: string): number {
+export function hexLuminance(hex: string): number {
   const { r, g, b } = hexToRgb(hex)
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+}
+
+/**
+ * Detect "boring" colors: near-black, near-white, or desaturated grays.
+ * These are typically page-builder defaults (WordPress, Elementor) not brand colors.
+ */
+export function isBoringColor(hex: string): boolean {
+  const { r, g, b } = hexToRgb(hex)
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2 / 255
+  const s = max === min ? 0 : (max - min) / (l > 0.5 ? (510 - max - min) : (max + min))
+  // Low saturation, too dark, or too light
+  return s < 0.12 || l < 0.08 || l > 0.92
+}
+
+/**
+ * Darken a hex color by a factor (0-1). 0.2 = 20% darker.
+ */
+export function darkenColor(hex: string, amount: number): string {
+  const { r, g, b } = hexToRgb(hex)
+  const factor = 1 - amount
+  return rgbToHex(
+    Math.round(r * factor),
+    Math.round(g * factor),
+    Math.round(b * factor),
+  )
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const clamp = (v: number) => Math.max(0, Math.min(255, v))
+  return `#${clamp(r).toString(16).padStart(2, '0')}${clamp(g).toString(16).padStart(2, '0')}${clamp(b).toString(16).padStart(2, '0')}`
 }
 
 function mixColors(base: string, mix: string, ratio: number): string {
@@ -81,7 +130,7 @@ function mixColors(base: string, mix: string, ratio: number): string {
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${bl.toString(16).padStart(2, '0')}`
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
+export function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const h = hex.replace('#', '')
   return {
     r: parseInt(h.substring(0, 2), 16),
