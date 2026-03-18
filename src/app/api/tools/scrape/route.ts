@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import sharp from 'sharp'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
@@ -7,6 +8,26 @@ import { pickBrandColors } from '@/lib/enrichment/color-picker'
 import { extractPalette, isBoringColor, hexLuminance } from '@/lib/enrichment/colors'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import { INDUSTRIES } from '@/data/industries-seed'
+
+/**
+ * Ensure a buffer is rasterized PNG. SVGs and other vector formats
+ * can't be read by node-vibrant, so we convert them first.
+ */
+async function ensureRasterBuffer(buf: Buffer): Promise<Buffer> {
+  // Check if it's SVG (text-based)
+  const head = buf.subarray(0, 256).toString('utf8').trim()
+  if (head.startsWith('<svg') || head.startsWith('<?xml') || head.includes('<svg')) {
+    return sharp(buf).resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } }).png().toBuffer()
+  }
+  // For other formats, just ensure it's decodable by sharp → PNG
+  try {
+    const meta = await sharp(buf).metadata()
+    if (meta.format === 'svg') {
+      return sharp(buf).resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } }).png().toBuffer()
+    }
+  } catch { /* not an image sharp knows, return as-is */ }
+  return buf
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -143,19 +164,29 @@ export async function POST(request: NextRequest) {
       let passPreviewBg: string | null = null
       let passPreviewAccent: string | null = null
 
-      // Extract vibrant palette from logo (needed for fallback even if AI succeeds)
+      // Ensure logo is rasterized (SVG → PNG) before color extraction
+      let rasterLogoBuffer: Buffer | null = null
       if (logoBuffer) {
         try {
-          const palette = await extractPalette(logoBuffer)
+          rasterLogoBuffer = await ensureRasterBuffer(logoBuffer)
+        } catch {
+          rasterLogoBuffer = logoBuffer // fallback to original
+        }
+      }
+
+      // Extract vibrant palette from logo (needed for fallback even if AI succeeds)
+      if (rasterLogoBuffer) {
+        try {
+          const palette = await extractPalette(rasterLogoBuffer)
           colors = palette
         } catch { /* non-fatal */ }
       }
 
       // Step 1: AI Color Picker
-      if (logoBuffer) {
+      if (rasterLogoBuffer) {
         try {
           const aiColors = await pickBrandColors(
-            logoBuffer,
+            rasterLogoBuffer,
             { title: result.title, description: result.description, themeColor: result.themeColor },
             result.brandColors?.candidates || [],
           )
