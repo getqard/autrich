@@ -1,11 +1,11 @@
 /**
- * Website Header Screenshot — screenshotone.com
+ * Website Screenshot — screenshotone.com
  *
- * Captures the top 400px of a website for AI color analysis.
+ * Captures the above-the-fold area (1440×900) of a website for AI color analysis.
  * Returns null on any failure (non-fatal).
  */
 
-export async function captureHeader(url: string): Promise<Buffer | null> {
+export async function captureWebsite(url: string): Promise<Buffer | null> {
   const accessKey = process.env.SCREENSHOTONE_ACCESS_KEY
   if (!accessKey) {
     console.log('[Screenshot] No SCREENSHOTONE_ACCESS_KEY, skipping')
@@ -16,8 +16,8 @@ export async function captureHeader(url: string): Promise<Buffer | null> {
     const params = new URLSearchParams({
       access_key: accessKey,
       url,
-      viewport_width: '1280',
-      viewport_height: '400',
+      viewport_width: '1440',
+      viewport_height: '900',
       full_page: 'false',
       format: 'png',
       block_cookie_banners: 'true',
@@ -46,10 +46,13 @@ export async function captureHeader(url: string): Promise<Buffer | null> {
       return null
     }
 
-    console.log(`[Screenshot] Captured ${url} → ${buffer.length}B`)
+    console.log(`[Screenshot] Captured ${url} → ${(buffer.length / 1024).toFixed(0)}KB (1440×900)`)
     return buffer
   } catch (err) {
     console.log(`[Screenshot] Failed (non-fatal): ${err instanceof Error ? err.message : err}`)
     return null
   }
 }
+
+/** @deprecated Use captureWebsite instead */
+export const captureHeader = captureWebsite

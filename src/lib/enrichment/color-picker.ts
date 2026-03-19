@@ -1,306 +1,112 @@
 /**
  * AI Brand Color Picker — Claude Haiku Vision
  *
- * Sends a composite image (logo + header screenshot + CSS swatches) to Haiku.
- * The AI determines background, label, and accent colors from the full brand identity.
+ * Sends website screenshot + logo as TWO separate images to Haiku.
+ * AI picks background + label colors directly from the brand identity.
+ * Post-processing only does accessibility adjustments.
  *
- * Cost: ~$0.001-0.002 per call (1-2 images + short text, Haiku)
+ * Cost: ~$0.001-0.002 per call (2 images + short text, Haiku)
  */
 
 import Anthropic from '@anthropic-ai/sdk'
 import sharp from 'sharp'
-import type { ColorCandidate } from './types'
-import { hexLuminance, colorSaturation, perceptualDistance, hexToRgb } from './colors'
+import { hexLuminance, wcagContrastRatio, colorSaturation, hexToHsl, hslToHex, ensurePassSuitable } from './colors'
 
 export type AIColorResult = {
   background: string
-  accent: string | null
   label: string | null
   confidence: number
 }
 
-// ─── Swatch Grid Renderer ────────────────────────────────────
+function validateLabel(rawLabel: string | null, bg: string, adjustments: string[]): string | null {
+  if (!rawLabel || !isValidHex(rawLabel)) return null
 
-/**
- * Render top CSS candidates as a grid of colored squares with hex labels.
- * Output: ~500×120px PNG
- */
-async function renderSwatchGrid(candidates: ColorCandidate[]): Promise<Buffer> {
-  const swatches = candidates.slice(0, 10)
-  const size = 50
-  const gap = 5
-  const labelHeight = 16
-  const cols = 5
-  const rows = Math.ceil(swatches.length / cols)
-  const width = cols * (size + gap) - gap
-  const height = rows * (size + labelHeight + gap) - gap
-
-  // Create colored square overlays
-  const composites: sharp.OverlayOptions[] = []
-
-  for (let i = 0; i < swatches.length; i++) {
-    const col = i % cols
-    const row = Math.floor(i / cols)
-    const x = col * (size + gap)
-    const y = row * (size + labelHeight + gap)
-
-    const rgb = hexToRgb(swatches[i].hex)
-
-    // Colored square
-    const square = await sharp({
-      create: {
-        width: size,
-        height: size,
-        channels: 4,
-        background: { r: rgb.r, g: rgb.g, b: rgb.b, alpha: 255 },
-      },
-    }).png().toBuffer()
-
-    composites.push({ input: square, left: x, top: y })
-
-    // Hex label as small text image using SVG
-    const labelSvg = Buffer.from(`<svg width="${size}" height="${labelHeight}">
-      <text x="${size / 2}" y="${labelHeight - 2}" font-family="monospace" font-size="9"
-            fill="white" text-anchor="middle">${swatches[i].hex}</text>
-    </svg>`)
-    const labelImg = await sharp(labelSvg).png().toBuffer()
-    composites.push({ input: labelImg, left: x, top: y + size })
+  const label = rawLabel.toLowerCase()
+  const labelSat = colorSaturation(label)
+  if (labelSat < 0.15) {
+    console.log(`[AI Colors] Validation: label_sat=${labelSat.toFixed(2)} ✗ (too gray) → dropping label`)
+    return null
   }
 
-  return sharp({
-    create: {
-      width: Math.max(width, 1),
-      height: Math.max(height, 1),
-      channels: 4,
-      background: { r: 30, g: 30, b: 30, alpha: 255 },
-    },
-  })
-    .composite(composites)
-    .png()
-    .toBuffer()
-}
+  let labelWcag = wcagContrastRatio(label, bg)
+  if (labelWcag >= 3.0) {
+    console.log(`[AI Colors] Validation: label_wcag=${labelWcag.toFixed(1)} ✓ | label_sat=${labelSat.toFixed(2)} ✓`)
+    return label
+  }
 
-// ─── Composite Image Builder ─────────────────────────────────
+  // Adjust lightness until WCAG ≥ 3.0
+  const bgLumVal = hexLuminance(bg)
+  const hsl = hexToHsl(label)
+  const direction = bgLumVal < 0.5 ? 1 : -1
 
-/**
- * Build a composite image combining logo, swatches, and optional header screenshot.
- *
- * Layout:
- * ┌──────────────────────────────────┐
- * │  [Logo 256×256]  [Swatches Grid] │  ← ~640×256
- * ├──────────────────────────────────┤
- * │  [Header Screenshot 640×200]     │  ← only if available
- * └──────────────────────────────────┘
- */
-async function composeColorInput(
-  logo: Buffer,
-  swatches: Buffer,
-  header?: Buffer | null,
-): Promise<Buffer> {
-  const topWidth = 640
-  const topHeight = 260
-
-  // Resize logo to 256×256
-  const logoResized = await sharp(logo)
-    .resize(256, 256, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
-    .png()
-    .toBuffer()
-
-  // Resize swatches to fit right side
-  const swatchResized = await sharp(swatches)
-    .resize(370, 250, { fit: 'contain', background: { r: 30, g: 30, b: 30, alpha: 255 } })
-    .png()
-    .toBuffer()
-
-  // Compose top row: logo left, swatches right
-  const composites: sharp.OverlayOptions[] = [
-    { input: logoResized, left: 5, top: 2 },
-    { input: swatchResized, left: 265, top: 5 },
-  ]
-
-  let totalHeight = topHeight
-
-  // Add header screenshot if available
-  let headerResized: Buffer | null = null
-  if (header) {
-    try {
-      headerResized = await sharp(header)
-        .resize(topWidth, 200, { fit: 'cover' })
-        .png()
-        .toBuffer()
-      totalHeight += 200
-    } catch {
-      // header resize failed, skip
+  for (let step = 0; step < 20; step++) {
+    hsl.l = Math.max(0, Math.min(1, hsl.l + direction * 0.03))
+    const adjusted = hslToHex(hsl.h, hsl.s, hsl.l)
+    labelWcag = wcagContrastRatio(adjusted, bg)
+    if (labelWcag >= 3.0) {
+      adjustments.push(`label wcag=${wcagContrastRatio(label, bg).toFixed(1)} → lightened to ${adjusted} (wcag=${labelWcag.toFixed(1)})`)
+      return adjusted
     }
   }
 
-  // Create composite
-  let result = sharp({
-    create: {
-      width: topWidth,
-      height: totalHeight,
-      channels: 4,
-      background: { r: 30, g: 30, b: 30, alpha: 255 },
-    },
-  }).composite(composites)
-
-  if (headerResized) {
-    // Sharp composites must all be in one call, so rebuild
-    composites.push({ input: headerResized, left: 0, top: topHeight })
-    result = sharp({
-      create: {
-        width: topWidth,
-        height: totalHeight,
-        channels: 4,
-        background: { r: 30, g: 30, b: 30, alpha: 255 },
-      },
-    }).composite(composites)
-  }
-
-  const buf = await result.png().toBuffer()
-  console.log(`[AI Color Picker] Composite image: ${topWidth}x${totalHeight} (${header ? 'with' : 'without'} header screenshot)`)
-  return buf
+  console.log(`[AI Colors] Validation: label wcag still ${labelWcag.toFixed(1)} after adjustment → dropping`)
+  return null
 }
-
-// ─── Main AI Picker ──────────────────────────────────────────
 
 /**
  * Use Claude Haiku Vision to pick brand colors for a Wallet Pass.
  *
- * Returns null if:
- * - No ANTHROPIC_API_KEY
- * - API call fails
- * - AI confidence < 0.5
- * - Post-validation rejects the result
+ * Sends two separate images: website screenshot + logo thumbnail.
+ * Returns null if no API key, no screenshot, API error, or post-validation fails.
  */
 export async function pickBrandColors(
   logoBuffer: Buffer,
-  context: {
-    title: string | null
-    description: string | null
-    themeColor: string | null
-    headerBackground?: string | null
-    logoContentColor?: string | null
-  },
-  cssCandidates: ColorCandidate[],
-  headerScreenshot?: Buffer | null,
+  websiteScreenshot: Buffer | null,
 ): Promise<AIColorResult | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.log('[AI Colors] No ANTHROPIC_API_KEY, skipping')
+    return null
+  }
+  if (!websiteScreenshot || websiteScreenshot.length < 1000) {
+    console.log('[AI Colors] No screenshot available, skipping AI vision')
+    return null
+  }
 
   try {
-    // Resize logo to 256px thumbnail
-    const thumbnail = await sharp(logoBuffer)
+    // Resize screenshot for token efficiency (~720×450)
+    const screenshotResized = await sharp(websiteScreenshot)
+      .resize(720, 450, { fit: 'cover' })
+      .png()
+      .toBuffer()
+
+    // Resize logo to 256×256 thumbnail
+    const logoThumbnail = await sharp(logoBuffer)
       .resize(256, 256, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
       .png()
       .toBuffer()
 
-    // Build composite image if we have swatches or header
-    let compositeImage: Buffer | null = null
-    const hasSwatches = cssCandidates.length >= 2
-    const hasHeader = headerScreenshot && headerScreenshot.length > 1000
+    console.log(`[AI Colors] Sending to Haiku: screenshot=${(screenshotResized.length / 1024).toFixed(0)}KB logo=${(logoThumbnail.length / 1024).toFixed(0)}KB`)
 
-    if (hasSwatches || hasHeader) {
-      try {
-        const swatchGrid = hasSwatches
-          ? await renderSwatchGrid(cssCandidates)
-          : await sharp({ create: { width: 100, height: 50, channels: 4, background: { r: 30, g: 30, b: 30, alpha: 255 } } }).png().toBuffer()
-
-        compositeImage = await composeColorInput(
-          logoBuffer,
-          swatchGrid,
-          hasHeader ? headerScreenshot : null,
-        )
-      } catch (err) {
-        console.log(`[AI Color Picker] Composite build failed, falling back to logo-only: ${err instanceof Error ? err.message : err}`)
-      }
-    }
-
-    // Build prompt — vision-first when we have a composite
-    const contextParts: string[] = []
-    if (context.title) contextParts.push(`Website-Titel: ${context.title}`)
-    if (context.description) contextParts.push(`Beschreibung: ${context.description}`)
-    if (context.logoContentColor) contextParts.push(`Hauptfarbe des Logos: ${context.logoContentColor} — Background MUSS sich davon unterscheiden!`)
-
-    let prompt: string
-
-    if (compositeImage) {
-      // Vision-first prompt — AI sees everything visually
-      prompt = [
-        'Du siehst ein Composite-Bild eines Unternehmens:',
-        '- OBEN LINKS: Das Logo des Unternehmens',
-        '- OBEN RECHTS: Farben aus dem CSS der Website (als farbige Quadrate mit Hex-Labels)',
-        hasHeader ? '- UNTEN: Screenshot des Website-Headers' : '',
-        '',
-        'Wähle 3 Farben für eine Apple Wallet Treuekarte:',
-        '',
-        '1. BACKGROUND: Dunkle Markenfarbe (Luminance 0.05-0.40).',
-        '   Das Logo wird DARAUF angezeigt — wähle eine Farbe auf der das Logo gut sichtbar ist.',
-        '',
-        '2. LABEL: Farbiger Akzent der auf dem Background POP macht.',
-        '   MUSS saturiert sein (kein Grau, kein Weiß, kein Creme).',
-        '   Nimm eine echte Markenfarbe (Rot, Orange, Blau, Grün...).',
-        '',
-        '3. ACCENT: Sekundäre Markenfarbe (kann gleich wie Label sein).',
-        '',
-        contextParts.length > 0 ? contextParts.join('\n') : '',
-        '',
-        'Antworte NUR mit JSON: {"background":"#hex","label":"#hex","accent":"#hex","confidence":0.9}',
-      ].filter(Boolean).join('\n')
-    } else {
-      // Fallback: logo-only prompt (as before, but with label field)
-      if (context.themeColor) contextParts.push(`Theme-Color Meta-Tag: ${context.themeColor}`)
-      if (context.headerBackground) contextParts.push(`Header-Hintergrund der Website: ${context.headerBackground} — Das Logo sitzt auf dieser Farbe!`)
-
-      const candidateList = cssCandidates.length > 0
-        ? cssCandidates
-            .slice(0, 10)
-            .map(c => `${c.hex} (${c.role}, ${c.source}, confidence ${c.confidence.toFixed(2)})`)
-            .join('\n')
-        : 'Keine CSS-Farben gefunden.'
-
-      prompt = [
-        'Du siehst das Logo eines Unternehmens und eine Liste von Farben die auf der Website gefunden wurden.',
-        '',
-        'Bestimme DREI Farben für einen Apple Wallet Pass:',
-        '1. BACKGROUND: Dunkle Farbe auf der das Logo SICHTBAR sein muss (nicht gleiche Farbe wie Logo!)',
-        '2. LABEL: Farbiger Akzent der auf dem Background POP macht (saturiert, kein Grau/Weiß)',
-        '3. ACCENT: Sekundäre Brand-Farbe (kann gleich wie Label sein)',
-        '',
-        'Regeln:',
-        '- Die Hintergrundfarbe soll eine DUNKLE Version der Hauptbrandfarbe sein',
-        '- WICHTIG: Hintergrund darf NICHT die gleiche Farbe wie das Logo sein',
-        '- NIEMALS reines Schwarz (#000000) oder fast-schwarz (<#202020)',
-        '- NIEMALS reines Weiß oder sehr helle Farben (>= #E0E0E0)',
-        '- NIEMALS neutrale Grautöne — immer eine Farbe mit Sättigung',
-        '',
-        contextParts.length > 0 ? contextParts.join('\n') : '',
-        '',
-        `CSS-Farben von der Website:\n${candidateList}`,
-        '',
-        'Antworte NUR mit JSON: {"background":"#hex","label":"#hex","accent":"#hex","confidence":0.9}',
-      ].filter(Boolean).join('\n')
-    }
+    const prompt = [
+      'Du siehst den Screenshot einer Website und das Logo eines Unternehmens.',
+      '',
+      'Bestimme 2 Farben für eine Apple Wallet Treuekarte:',
+      '',
+      '1. BACKGROUND: Eine dunkle Farbe die zur Marke passt.',
+      '   - Das Logo wird darauf angezeigt und muss gut sichtbar sein.',
+      '   - Idealerweise eine dunklere Version der Hauptmarkenfarbe.',
+      '   - Luminanz zwischen 0.05 und 0.40 (nicht zu dunkel, nicht zu hell).',
+      '',
+      '2. LABEL: Eine saturierte Akzentfarbe die auf dem Background auffällt.',
+      '   - Nimm eine echte Farbe die auf der Website vorkommt (Buttons, Akzente, Highlights).',
+      '   - KEIN Grau, Weiß, Schwarz oder Creme — muss farbig sein.',
+      '   - Muss auf dem Background lesbar sein (guter Kontrast).',
+      '',
+      'Schau dir die Website GENAU an. Welche Farben definieren diese Marke?',
+      'Antworte NUR mit JSON: {"background":"#hex","label":"#hex","confidence":0.9}',
+    ].join('\n')
 
     const client = new Anthropic()
-
-    // Build message content — composite OR logo-only
-    const imageContent: Anthropic.ImageBlockParam = compositeImage
-      ? {
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: 'image/png',
-            data: compositeImage.toString('base64'),
-          },
-        }
-      : {
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: 'image/png',
-            data: thumbnail.toString('base64'),
-          },
-        }
 
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -309,7 +115,22 @@ export async function pickBrandColors(
         {
           role: 'user',
           content: [
-            imageContent,
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: screenshotResized.toString('base64'),
+              },
+            },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: logoThumbnail.toString('base64'),
+              },
+            },
             {
               type: 'text',
               text: prompt,
@@ -325,95 +146,58 @@ export async function pickBrandColors(
       .join('')
 
     const jsonMatch = text.match(/\{[^}]+\}/)
-    if (!jsonMatch) return null
-
-    const parsed = JSON.parse(jsonMatch[0])
-    const background = typeof parsed.background === 'string' ? parsed.background : null
-    const accent = typeof parsed.accent === 'string' ? parsed.accent : null
-    const label = typeof parsed.label === 'string' ? parsed.label : null
-    const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0
-
-    if (!background || !isValidHex(background)) return null
-    if (confidence < 0.5) return null
-
-    // ─── Hallucination Check ─────────────────────────────────
-    // In logo-only mode: AI can only see the logo, must pick from CSS candidates.
-    // In composite mode: AI sees the full website screenshot — trust its picks.
-    // Colors visible only in photography (food, ambiance) won't be in CSS but ARE real.
-    let validBg = background
-    let validAccentHex = accent && isValidHex(accent) ? accent.toLowerCase() : null
-    let validLabelHex = label && isValidHex(label) ? label.toLowerCase() : null
-
-    if (!compositeImage) {
-      // Logo-only mode: strict hallucination guard
-      const isGrounded = (hex: string): boolean => {
-        if (cssCandidates.length === 0) return true
-        return cssCandidates.some(c => perceptualDistance(hex, c.hex) < 80)
-      }
-
-      if (!isGrounded(validBg)) {
-        console.log(`[AI Color Picker] BG ${validBg} hallucinated (no CSS match within dist 80)`)
-        validBg = ''
-      }
-      if (validAccentHex && !isGrounded(validAccentHex)) {
-        console.log(`[AI Color Picker] Accent ${validAccentHex} hallucinated → dropped`)
-        validAccentHex = null
-      }
-      if (validLabelHex && !isGrounded(validLabelHex)) {
-        console.log(`[AI Color Picker] Label ${validLabelHex} hallucinated → dropped`)
-        validLabelHex = null
-      }
-
-      if (!validBg && !validAccentHex && !validLabelHex) {
-        console.log(`[AI Color Picker] All colors hallucinated → returning null`)
-        return null
-      }
-    } else {
-      console.log(`[AI Color Picker] Composite mode: trusting AI picks (bg=${validBg}, label=${validLabelHex}, accent=${validAccentHex})`)
-    }
-
-    // ─── Post-Validation (luminance, logo contrast) ──────────
-    const bgLum = validBg ? hexLuminance(validBg) : 0
-    let bgRejected = !validBg
-
-    // Reject too dark (near-black)
-    if (!bgRejected && bgLum < 0.05) {
-      console.log(`[AI Color Picker] BG rejected: too dark (lum=${bgLum.toFixed(3)})`)
-      bgRejected = true
-    }
-    // Reject too bright
-    if (!bgRejected && bgLum > 0.85) {
-      console.log(`[AI Color Picker] BG rejected: too bright (lum=${bgLum.toFixed(3)})`)
-      bgRejected = true
-    }
-    // Reject if BG ≈ logo color (logo would be invisible)
-    // Relax threshold when composite was used — AI sees the full website context
-    // and knows the logo works on this background
-    const logoDistThreshold = compositeImage ? 40 : 100
-    if (!bgRejected && context.logoContentColor) {
-      const dist = perceptualDistance(validBg, context.logoContentColor)
-      if (dist < logoDistThreshold) {
-        console.log(`[AI Color Picker] BG rejected: too close to logo color (dist=${dist.toFixed(1)} < ${logoDistThreshold})`)
-        bgRejected = true
-      }
-    }
-
-    if (bgRejected) {
-      // BG rejected → discard label/accent too (they were chosen for this BG)
-      console.log(`[AI Color Picker] BG rejected → discarding label/accent (chosen for wrong BG)`)
+    if (!jsonMatch) {
+      console.log(`[AI Colors] No JSON in response: ${text.substring(0, 200)}`)
       return null
     }
 
-    console.log(`[AI Color Picker] background=${validBg}, label=${validLabelHex}, accent=${validAccentHex}, confidence=${confidence}`)
+    const parsed = JSON.parse(jsonMatch[0])
+    const rawBg = typeof parsed.background === 'string' ? parsed.background : null
+    const rawLabel = typeof parsed.label === 'string' ? parsed.label : null
+    const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0
+
+    console.log(`[AI Colors] Raw response: bg=${rawBg} label=${rawLabel} confidence=${confidence}`)
+
+    if (!rawBg || !isValidHex(rawBg)) {
+      console.log(`[AI Colors] Invalid background hex: ${rawBg}`)
+      return null
+    }
+    if (confidence < 0.5) {
+      console.log(`[AI Colors] Confidence too low: ${confidence}`)
+      return null
+    }
+
+    // ─── Post-Validation ──────────────────────────────────────
+    const adjustments: string[] = []
+
+    // BG: ensure luminance 0.05-0.40
+    let finalBg = rawBg.toLowerCase()
+    const bgLum = hexLuminance(finalBg)
+    if (bgLum < 0.05 || bgLum > 0.40) {
+      finalBg = ensurePassSuitable(finalBg)
+      adjustments.push(`bg lum=${bgLum.toFixed(2)} out of range → adjusted to ${finalBg} (lum=${hexLuminance(finalBg).toFixed(2)})`)
+    } else {
+      console.log(`[AI Colors] Validation: bg_lum=${bgLum.toFixed(2)} ✓`)
+    }
+
+    // Label: validate and adjust
+    const finalLabel = validateLabel(rawLabel, finalBg, adjustments)
+
+    if (adjustments.length > 0) {
+      for (const adj of adjustments) {
+        console.log(`[AI Colors] Adjustment: ${adj}`)
+      }
+    }
+
+    console.log(`[AI Colors] Final: bg=${finalBg} label=${finalLabel} (${adjustments.length} adjustments)`)
 
     return {
-      background: validBg.toLowerCase(),
-      accent: validAccentHex,
-      label: validLabelHex,
+      background: finalBg,
+      label: finalLabel,
       confidence,
     }
   } catch (err) {
-    console.error('[AI Color Picker] Failed (non-fatal):', err instanceof Error ? err.message : err)
+    console.error('[AI Colors] Failed (non-fatal):', err instanceof Error ? err.message : err)
     return null
   }
 }

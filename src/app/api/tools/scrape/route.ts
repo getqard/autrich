@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
-import { captureHeader } from '@/lib/enrichment/screenshot'
+import { captureWebsite } from '@/lib/enrichment/screenshot'
 import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     // Parallel: Scrape website + capture header screenshot
     const [result, headerScreenshot] = await Promise.all([
       scrapeWebsite(url),
-      captureHeader(url),
+      captureWebsite(url),
     ])
 
     // ─── Enrichment Preview ─────────────────────────────────
