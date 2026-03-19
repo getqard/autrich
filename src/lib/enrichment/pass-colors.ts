@@ -414,33 +414,36 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   }
 
   // ── Score each candidate ──
-  function scoreLabelCandidate(hex: string, conf: number, role?: string): { total: number; breakdown: string } {
+  function scoreLabelCandidate(hex: string, conf: number, role?: string, source?: string): { total: number; breakdown: string } {
     const sat = colorSaturation(hex)
     const wcag = wcagContrastRatio(hex, bg!)
     const lum = hexLuminance(hex)
 
-    // Saturation: colorful labels (capped to prevent pure primaries dominating)
-    const satScore = Math.min(sat * 35, 22)
+    // Saturation: colorful labels
+    const satScore = sat * 35
 
     // Confidence from CSS extraction
     const confScore = conf * 25
 
-    // Cluster bonus: how many other pool candidates have similar color?
-    // Multiple similar colors = strong brand signal
+    // Cluster bonus: how many other SATURATED pool candidates have similar color?
+    // Gray clusters don't count — only real brand color repetition matters.
     let clusterCount = 0
     for (const other of labelPool) {
       if (other.hex.toLowerCase() === hex.toLowerCase()) continue
+      if (colorSaturation(other.hex) < 0.15) continue // skip unsaturated neighbors
       if (perceptualDistance(hex, other.hex) < 50) clusterCount++
     }
-    const clusterNorm = Math.min(clusterCount / 3, 1.0)
+    // Only award cluster bonus if this color itself is saturated
+    const clusterNorm = sat >= 0.15 ? Math.min(clusterCount / 3, 1.0) : 0
     const clusterScore = clusterNorm * 25
 
     // WCAG bonus: reward readable labels
     const wcagScore = wcag >= 3.0 ? 15 : (wcag >= 2.5 ? 8 : 0)
 
-    // Role bonus: CSS accent colors are more likely brand accents
+    // Role bonus: CSS accent colors and AI picks are more likely brand accents
     // Background colors used as labels are suspicious (often hidden elements)
-    const roleScore = role === 'accent' ? 10 : (role === 'background' ? -5 : 0)
+    const isAiSource = source === 'ai-label' || source === 'ai-accent'
+    const roleScore = isAiSource ? 10 : (role === 'accent' ? 10 : (role === 'background' ? -5 : 0))
 
     let total = satScore + confScore + clusterScore + wcagScore + roleScore
 
@@ -450,14 +453,14 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     if (isNearWhite || isNearBlack || sat < 0.1) total -= 15
     if (FRAMEWORK_COLORS.has(hex.toLowerCase())) total -= 10
 
-    const breakdown = `sat=${sat.toFixed(2)}→${satScore.toFixed(0)} conf=${conf.toFixed(2)}×25=${confScore.toFixed(0)} cluster=${clusterCount}→${clusterScore.toFixed(0)} wcag=${wcag.toFixed(1)}→${wcagScore} role=${role ?? '-'}→${roleScore} pen=${(isNearWhite || isNearBlack || sat < 0.1 ? -15 : 0) + (FRAMEWORK_COLORS.has(hex.toLowerCase()) ? -10 : 0)}`
+    const breakdown = `sat=${sat.toFixed(2)}×35=${satScore.toFixed(0)} conf=${conf.toFixed(2)}×25=${confScore.toFixed(0)} cluster=${clusterCount}→${clusterScore.toFixed(0)} wcag=${wcag.toFixed(1)}→${wcagScore} role=${isAiSource ? 'ai' : (role ?? '-')}→${roleScore} pen=${(isNearWhite || isNearBlack || sat < 0.1 ? -15 : 0) + (FRAMEWORK_COLORS.has(hex.toLowerCase()) ? -10 : 0)}`
 
     return { total, breakdown }
   }
 
   // Score all candidates
   const scored = labelPool.map(c => {
-    const { total, breakdown } = scoreLabelCandidate(c.hex, c.confidence, c.role)
+    const { total, breakdown } = scoreLabelCandidate(c.hex, c.confidence, c.role, c.source)
     return { ...c, score: total, breakdown }
   }).sort((a, b) => b.score - a.score)
 
