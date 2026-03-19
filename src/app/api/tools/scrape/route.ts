@@ -5,7 +5,8 @@ import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
 import { pickBrandColors } from '@/lib/enrichment/color-picker'
-import { extractPalette, isBoringColor, hexLuminance, darkenColor } from '@/lib/enrichment/colors'
+import { extractPalette, extractLogoContentColor, colorDistance, isBoringColor, hexLuminance, darkenColor } from '@/lib/enrichment/colors'
+import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import { INDUSTRIES } from '@/data/industries-seed'
 
@@ -146,6 +147,17 @@ export async function POST(request: NextRequest) {
         logoSource = brandfetchSource!
       }
 
+      // 2c. Instagram Profilbild (when website + Brandfetch didn't yield a logo)
+      if (!logoBuffer && result.socialLinks?.instagram) {
+        try {
+          const igBuffer = await fetchInstagramAvatar(result.socialLinks.instagram)
+          if (igBuffer) {
+            logoBuffer = igBuffer
+            logoSource = 'instagram'
+          }
+        } catch { /* non-fatal */ }
+      }
+
       // 3. Google Favicon
       if (!logoBuffer) {
         const fav = await fetchGoogleFavicon(domain)
@@ -205,7 +217,32 @@ export async function POST(request: NextRequest) {
         } catch { /* non-fatal */ }
       }
 
-      // Step 2: CSS Brand Colors (only if colorful)
+      // Step 2: Contrast-based CSS color selection (Logo ↔ CSS)
+      // Instead of filtering "boring" colors, pick the CSS color with
+      // MAXIMUM contrast to the logo content color.
+      const logoColor = rasterLogoBuffer
+        ? await extractLogoContentColor(rasterLogoBuffer).catch(() => null)
+        : null
+
+      if (!passPreviewBg && result.brandColors?.candidates?.length && logoColor) {
+        const ranked = result.brandColors.candidates
+          .map(c => ({ ...c, contrast: colorDistance(c.hex, logoColor.hex) }))
+          .sort((a, b) => b.contrast - a.contrast)
+
+        const best = ranked[0]
+        if (best && best.contrast > 80) {
+          const lum = hexLuminance(best.hex)
+          if (lum < 0.4) {
+            passPreviewBg = best.hex
+          } else {
+            passPreviewBg = darkenColor(best.hex, Math.min(0.5, (lum - 0.25) / lum))
+          }
+          const second = ranked.find(c => c.hex !== best.hex)
+          passPreviewAccent = second?.hex || logoColor.hex
+        }
+      }
+
+      // Step 2b: CSS Brand Colors fallback (old path — no logo color available)
       if (!passPreviewBg && result.brandColors?.confidence >= 0.6 && result.brandColors.backgroundColor) {
         if (!isBoringColor(result.brandColors.backgroundColor)) {
           passPreviewBg = result.brandColors.backgroundColor
@@ -213,8 +250,17 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Step 3: Logo palette (node-vibrant) — extractPalette now trims the logo
-      // and uses saturation-ranking, so colors.dominant should be a real brand color
+      // Step 3: Logo color as background (darken if needed)
+      if (!passPreviewBg && logoColor && logoColor.saturation >= 0.15) {
+        const lum = logoColor.luminance
+        if (lum > 0.4) {
+          passPreviewBg = darkenColor(logoColor.hex, Math.min(0.6, (lum - 0.25) / lum))
+        } else {
+          passPreviewBg = logoColor.hex
+        }
+      }
+
+      // Step 3b: Logo palette (node-vibrant) — saturation-ranked
       if (!passPreviewBg && colors?.dominant) {
         if (!isBoringColor(colors.dominant)) {
           passPreviewBg = colors.dominant
@@ -222,7 +268,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Step 3b: Any saturated swatch from palette (when dominant was still boring)
+      // Step 3c: Any saturated swatch from palette
       if (!passPreviewBg && colors?.swatches?.length) {
         const bestSaturated = colors.swatches
           .filter(s => s.saturation >= 0.15)

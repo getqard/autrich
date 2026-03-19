@@ -3,7 +3,8 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { processLogo, validateLogoCandidate, fetchGoogleFavicon, generateInitialsLogo } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
-import { extractPalette, derivePassColors, adjustBgForContrast, isBoringColor, hexLuminance, darkenColor } from '@/lib/enrichment/colors'
+import { extractPalette, extractLogoContentColor, colorDistance, derivePassColors, adjustBgForContrast, isBoringColor, hexLuminance, darkenColor } from '@/lib/enrichment/colors'
+import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { pickBrandColors } from '@/lib/enrichment/color-picker'
 import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGmapsPhoto, cropToSquare } from '@/lib/enrichment/gmaps-photo'
@@ -209,6 +210,20 @@ export async function POST(
       logoSource = brandfetchSource!
     }
 
+    // 3b3. Instagram Profilbild (when website + Brandfetch didn't yield a logo)
+    const igHandle = (updateData.instagram_handle as string) || lead.instagram_handle
+    if (!logoBuffer && igHandle) {
+      try {
+        const igBuffer = await fetchInstagramAvatar(igHandle)
+        if (igBuffer) {
+          logoBuffer = igBuffer
+          logoSource = 'instagram'
+        }
+      } catch (err) {
+        console.error('Instagram avatar failed (non-fatal):', err)
+      }
+    }
+
     // 3c. GMaps Featured Image
     if (!logoBuffer && lead.gmaps_photos?.length > 0) {
       try {
@@ -312,11 +327,47 @@ export async function POST(
       }
     }
 
-    // 4b. CSS Brand Colors (only if colorful)
-    if (!bgHex && scrapeResult && scrapeResult.brandColors && (scrapeResult.brandColors.confidence ?? 0) >= 0.6 && scrapeResult.brandColors.backgroundColor) {
+    // 4b. Contrast-based CSS color selection (Logo ↔ CSS)
+    let logoColor: Awaited<ReturnType<typeof extractLogoContentColor>> = null
+    if (logoBuffer) {
+      try {
+        logoColor = await extractLogoContentColor(logoBuffer)
+      } catch { /* non-fatal */ }
+    }
+
+    if (!bgHex && scrapeResult?.brandColors?.candidates?.length && logoColor) {
+      const ranked = scrapeResult.brandColors.candidates
+        .map(c => ({ ...c, contrast: colorDistance(c.hex, logoColor!.hex) }))
+        .sort((a, b) => b.contrast - a.contrast)
+
+      const best = ranked[0]
+      if (best && best.contrast > 80) {
+        const lum = hexLuminance(best.hex)
+        if (lum < 0.4) {
+          bgHex = best.hex
+        } else {
+          bgHex = darkenColor(best.hex, Math.min(0.5, (lum - 0.25) / lum))
+        }
+        const second = ranked.find(c => c.hex !== best.hex)
+        accentHex = second?.hex || logoColor.hex
+      }
+    }
+
+    // 4b2. CSS Brand Colors fallback (no logo color available)
+    if (!bgHex && scrapeResult?.brandColors && (scrapeResult.brandColors.confidence ?? 0) >= 0.6 && scrapeResult.brandColors.backgroundColor) {
       if (!isBoringColor(scrapeResult.brandColors.backgroundColor)) {
         bgHex = scrapeResult.brandColors.backgroundColor
         accentHex = scrapeResult.brandColors.accentColor
+      }
+    }
+
+    // 4b3. Logo color as background (darken if needed)
+    if (!bgHex && logoColor && logoColor.saturation >= 0.15) {
+      const lum = logoColor.luminance
+      if (lum > 0.4) {
+        bgHex = darkenColor(logoColor.hex, Math.min(0.6, (lum - 0.25) / lum))
+      } else {
+        bgHex = logoColor.hex
       }
     }
 

@@ -154,6 +154,76 @@ export async function extractColors(imageBuffer: Buffer): Promise<{
   }
 }
 
+// ─── Logo Content Color Extraction ──────────────────────────
+
+/**
+ * Extract the actual content color of a logo by flattening on black
+ * and averaging non-black pixels.
+ *
+ * Why: A white-text logo on transparent background is invisible to
+ * node-vibrant (which sees only white). By flattening on black,
+ * transparent pixels become black → we skip them and average the
+ * real content pixels (white, gold, red, etc.).
+ */
+export async function extractLogoContentColor(imageBuffer: Buffer): Promise<{
+  hex: string
+  luminance: number
+  saturation: number
+} | null> {
+  const { default: sharpMod } = await import('sharp')
+
+  const { data, info } = await sharpMod(imageBuffer)
+    .flatten({ background: { r: 0, g: 0, b: 0 } })
+    .resize(64, 64, { fit: 'contain', background: { r: 0, g: 0, b: 0 } })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+
+  let totalR = 0, totalG = 0, totalB = 0
+  let count = 0
+  const pixelCount = info.width * info.height
+
+  for (let i = 0; i < pixelCount; i++) {
+    const r = data[i * 3]
+    const g = data[i * 3 + 1]
+    const b = data[i * 3 + 2]
+    // Skip near-black pixels (were transparent before flatten)
+    if (r < 15 && g < 15 && b < 15) continue
+    totalR += r
+    totalG += g
+    totalB += b
+    count++
+  }
+
+  // Too few content pixels → can't determine color
+  if (count < 50) return null
+
+  const avgR = Math.round(totalR / count)
+  const avgG = Math.round(totalG / count)
+  const avgB = Math.round(totalB / count)
+  const hex = rgbToHex(avgR, avgG, avgB)
+
+  return {
+    hex,
+    luminance: hexLuminance(hex),
+    saturation: colorSaturation(hex),
+  }
+}
+
+/**
+ * Euclidean distance between two colors in RGB space.
+ * Range: 0 (identical) to ~441 (black ↔ white).
+ */
+export function colorDistance(a: string, b: string): number {
+  const c1 = hexToRgb(a)
+  const c2 = hexToRgb(b)
+  return Math.sqrt(
+    (c1.r - c2.r) ** 2 +
+    (c1.g - c2.g) ** 2 +
+    (c1.b - c2.b) ** 2
+  )
+}
+
 // ─── Utility Functions ──────────────────────────────────────
 
 export function hexLuminance(hex: string): number {
