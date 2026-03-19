@@ -35,6 +35,7 @@ export type PassColorInput = {
   logoBuffer: Buffer | null
   cssCandidates: ColorCandidate[]
   headerBackground: string | null
+  headerScreenshot?: Buffer | null
   websiteContext: {
     title: string | null
     description: string | null
@@ -119,6 +120,7 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     logoBuffer,
     cssCandidates,
     headerBackground,
+    headerScreenshot,
     websiteContext,
     industrySlug,
     industryDefaults,
@@ -166,6 +168,7 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
 
   // ─── STEP 1: AI Color Picker ──────────────────────────────
   let aiAccentOnly: string | null = null // accent from AI even if BG was rejected
+  let aiLabelDirect: string | null = null // label picked by AI (when it sees the full composite)
 
   if (rasterLogo) {
     try {
@@ -177,16 +180,19 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
           logoContentColor: logoColor?.hex ?? null,
         },
         cssCandidates,
+        headerScreenshot,
       )
       if (aiColors && aiColors.confidence >= 0.7) {
         bg = aiColors.background
         accent = aiColors.accent
+        if (aiColors.label) aiLabelDirect = aiColors.label
         method = 'ai-picker'
-        log(`STEP 1 ✓ AI Picker: bg=${bg}, accent=${accent}, conf=${aiColors.confidence}`)
-      } else if (aiColors && aiColors.confidence === 0 && aiColors.accent) {
-        // BG was rejected by post-validation, but accent survived
+        log(`STEP 1 ✓ AI Picker: bg=${bg}, accent=${accent}, label=${aiLabelDirect}, conf=${aiColors.confidence}`)
+      } else if (aiColors && aiColors.confidence === 0 && (aiColors.accent || aiColors.label)) {
+        // BG was rejected by post-validation, but accent/label survived
         aiAccentOnly = aiColors.accent
-        log(`STEP 1 ~ AI Picker: BG rejected, keeping accent=${aiAccentOnly}`)
+        if (aiColors.label) aiLabelDirect = aiColors.label
+        log(`STEP 1 ~ AI Picker: BG rejected, keeping accent=${aiAccentOnly}, label=${aiLabelDirect}`)
       } else {
         log(`STEP 1 ✗ AI Picker: ${aiColors ? `conf=${aiColors.confidence} (< 0.7)` : 'returned null (no API key or failed)'}`)
       }
@@ -348,7 +354,33 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   const blackContrast = contrastRatio(bgLum, 0.0)
   const textColor = whiteContrast >= blackContrast ? '#ffffff' : '#000000'
 
-  // ═══ LABEL COLOR (score-based selection) ═════════════════════
+  // ═══ LABEL COLOR (AI-direct or score-based fallback) ═════════
+
+  // ── Try AI-picked label first ──
+  let aiLabelUsed = false
+  if (aiLabelDirect && bg) {
+    const aiLabelWcag = wcagContrastRatio(aiLabelDirect, bg)
+    const aiLabelSat = colorSaturation(aiLabelDirect)
+    if (aiLabelWcag >= 3.0 && aiLabelSat >= 0.15) {
+      // AI label passes validation — use directly
+      log(`Label: AI-direct ${aiLabelDirect} (wcag=${aiLabelWcag.toFixed(1)}, sat=${aiLabelSat.toFixed(2)}) ✓`)
+      aiLabelUsed = true
+    } else if (aiLabelSat >= 0.10) {
+      // Try adjusting for WCAG
+      const adjusted = ensureLabelContrast(aiLabelDirect, bg)
+      const adjWcag = wcagContrastRatio(adjusted, bg)
+      const adjSat = colorSaturation(adjusted)
+      if (adjWcag >= 3.0 && adjSat >= 0.15) {
+        aiLabelDirect = adjusted
+        aiLabelUsed = true
+        log(`Label: AI-direct adjusted ${aiLabelDirect} (wcag=${adjWcag.toFixed(1)}, sat=${adjSat.toFixed(2)}) ✓`)
+      } else {
+        log(`Label: AI-direct ${aiLabelDirect} failed after adjustment (wcag=${adjWcag.toFixed(1)}, sat=${adjSat.toFixed(2)}), falling back to score`)
+      }
+    } else {
+      log(`Label: AI-direct ${aiLabelDirect} too desaturated (sat=${aiLabelSat.toFixed(2)}), falling back to score`)
+    }
+  }
 
   // Known CSS framework colors — penalize as they're not brand-specific
   const FRAMEWORK_COLORS = new Set([
@@ -455,28 +487,32 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     log(`  ${c.hex} score=${c.score.toFixed(0)} [${c.breakdown}] (${c.source})`)
   }
 
-  // Pick best candidate that passes WCAG (or can be adjusted)
-  let labelColor: string | null = null
-  for (const c of scored) {
-    // Try raw first
-    if (wcagContrastRatio(c.hex, bg) >= 3.0) {
-      labelColor = c.hex
-      log(`Label: picked ${c.hex} (score=${c.score.toFixed(0)}, ${c.source})`)
-      break
-    }
-    // Try adjusting for WCAG
-    const adjusted = ensureLabelContrast(c.hex, bg)
-    if (wcagContrastRatio(adjusted, bg) >= 3.0 && colorSaturation(adjusted) >= 0.15) {
-      labelColor = adjusted
-      log(`Label: adjusted ${c.hex} → ${adjusted} (score=${c.score.toFixed(0)}, ${c.source})`)
-      break
-    }
-  }
+  // Pick label: AI-direct (already validated above) or score-based fallback
+  let labelColor: string | null = aiLabelUsed ? aiLabelDirect : null
 
-  // Fallback: mix of bg and text
   if (!labelColor) {
-    labelColor = mixColors(bg, textColor, 0.35)
-    log(`Label: fallback mix`)
+    // Score-based fallback
+    for (const c of scored) {
+      // Try raw first
+      if (wcagContrastRatio(c.hex, bg) >= 3.0) {
+        labelColor = c.hex
+        log(`Label: picked ${c.hex} (score=${c.score.toFixed(0)}, ${c.source})`)
+        break
+      }
+      // Try adjusting for WCAG
+      const adjusted = ensureLabelContrast(c.hex, bg)
+      if (wcagContrastRatio(adjusted, bg) >= 3.0 && colorSaturation(adjusted) >= 0.15) {
+        labelColor = adjusted
+        log(`Label: adjusted ${c.hex} → ${adjusted} (score=${c.score.toFixed(0)}, ${c.source})`)
+        break
+      }
+    }
+
+    // Fallback: mix of bg and text
+    if (!labelColor) {
+      labelColor = mixColors(bg, textColor, 0.35)
+      log(`Label: fallback mix`)
+    }
   }
 
   // Ensure label passes WCAG

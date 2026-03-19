@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
+import { captureHeader } from '@/lib/enrichment/screenshot'
 import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
@@ -17,7 +18,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'URL ist erforderlich' }, { status: 400 })
     }
 
-    const result = await scrapeWebsite(url)
+    // Parallel: Scrape website + capture header screenshot
+    const [result, headerScreenshot] = await Promise.all([
+      scrapeWebsite(url),
+      captureHeader(url),
+    ])
 
     // ─── Enrichment Preview ─────────────────────────────────
 
@@ -166,6 +171,7 @@ export async function POST(request: NextRequest) {
         logoBuffer,
         cssCandidates: result.brandColors?.candidates || [],
         headerBackground: result.brandColors?.headerBackground ?? null,
+        headerScreenshot,
         websiteContext: {
           title: result.title,
           description: result.description,
