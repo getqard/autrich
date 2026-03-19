@@ -337,34 +337,39 @@ export async function pickBrandColors(
     if (confidence < 0.5) return null
 
     // ─── Hallucination Check ─────────────────────────────────
-    // AI must pick colors that actually exist on the website.
-    // If a color has no CSS candidate within perceptual distance 80, it's hallucinated.
-    const isGrounded = (hex: string): boolean => {
-      if (cssCandidates.length === 0) return true // no candidates to check against
-      return cssCandidates.some(c => perceptualDistance(hex, c.hex) < 80)
-    }
-
+    // In logo-only mode: AI can only see the logo, must pick from CSS candidates.
+    // In composite mode: AI sees the full website screenshot — trust its picks.
+    // Colors visible only in photography (food, ambiance) won't be in CSS but ARE real.
     let validBg = background
     let validAccentHex = accent && isValidHex(accent) ? accent.toLowerCase() : null
     let validLabelHex = label && isValidHex(label) ? label.toLowerCase() : null
 
-    if (!isGrounded(validBg)) {
-      console.log(`[AI Color Picker] BG ${validBg} hallucinated (no CSS match within dist 80)`)
-      validBg = ''
-    }
-    if (validAccentHex && !isGrounded(validAccentHex)) {
-      console.log(`[AI Color Picker] Accent ${validAccentHex} hallucinated → dropped`)
-      validAccentHex = null
-    }
-    if (validLabelHex && !isGrounded(validLabelHex)) {
-      console.log(`[AI Color Picker] Label ${validLabelHex} hallucinated → dropped`)
-      validLabelHex = null
-    }
+    if (!compositeImage) {
+      // Logo-only mode: strict hallucination guard
+      const isGrounded = (hex: string): boolean => {
+        if (cssCandidates.length === 0) return true
+        return cssCandidates.some(c => perceptualDistance(hex, c.hex) < 80)
+      }
 
-    // If all colors were hallucinated, reject entirely
-    if (!validBg && !validAccentHex && !validLabelHex) {
-      console.log(`[AI Color Picker] All colors hallucinated → returning null`)
-      return null
+      if (!isGrounded(validBg)) {
+        console.log(`[AI Color Picker] BG ${validBg} hallucinated (no CSS match within dist 80)`)
+        validBg = ''
+      }
+      if (validAccentHex && !isGrounded(validAccentHex)) {
+        console.log(`[AI Color Picker] Accent ${validAccentHex} hallucinated → dropped`)
+        validAccentHex = null
+      }
+      if (validLabelHex && !isGrounded(validLabelHex)) {
+        console.log(`[AI Color Picker] Label ${validLabelHex} hallucinated → dropped`)
+        validLabelHex = null
+      }
+
+      if (!validBg && !validAccentHex && !validLabelHex) {
+        console.log(`[AI Color Picker] All colors hallucinated → returning null`)
+        return null
+      }
+    } else {
+      console.log(`[AI Color Picker] Composite mode: trusting AI picks (bg=${validBg}, label=${validLabelHex}, accent=${validAccentHex})`)
     }
 
     // ─── Post-Validation (luminance, logo contrast) ──────────
