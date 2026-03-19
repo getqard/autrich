@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     // Try Brandfetch logo + node-vibrant palette + GMaps mapping
 
     type EnrichmentLogo = { base64: string; source: string } | null
-    type EnrichmentColors = { dominant: string; accent: string | null; textColor: string; labelColor: string; swatches: Array<{ name: string; hex: string; population: number }> } | null
+    type EnrichmentColors = { dominant: string; accent: string | null; textColor: string; labelColor: string; swatches: Array<{ name: string; hex: string; population: number; saturation: number }> } | null
     type EnrichmentIndustry = { slug: string; method: string; gmapsCategory: string | null; emoji: string | null; defaultReward: string | null } | null
     type EnrichmentPassPreview = { bg: string; text: string; label: string } | null
 
