@@ -165,6 +165,8 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   let method = 'fallback'
 
   // ─── STEP 1: AI Color Picker ──────────────────────────────
+  let aiAccentOnly: string | null = null // accent from AI even if BG was rejected
+
   if (rasterLogo) {
     try {
       const aiColors = await pickBrandColors(
@@ -181,8 +183,12 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         accent = aiColors.accent
         method = 'ai-picker'
         log(`STEP 1 ✓ AI Picker: bg=${bg}, accent=${accent}, conf=${aiColors.confidence}`)
+      } else if (aiColors && aiColors.confidence === 0 && aiColors.accent) {
+        // BG was rejected by post-validation, but accent survived
+        aiAccentOnly = aiColors.accent
+        log(`STEP 1 ~ AI Picker: BG rejected, keeping accent=${aiAccentOnly}`)
       } else {
-        log(`STEP 1 ✗ AI Picker: ${aiColors ? `conf=${aiColors.confidence} (< 0.7)` : 'returned null (no API key or post-validation rejected)'}`)
+        log(`STEP 1 ✗ AI Picker: ${aiColors ? `conf=${aiColors.confidence} (< 0.7)` : 'returned null (no API key or failed)'}`)
       }
     } catch (err) {
       log(`STEP 1 ✗ AI Picker ERROR: ${err instanceof Error ? err.message : err}`)
@@ -328,6 +334,20 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   // ═══ LABEL COLOR (brand-aware) ═════════════════════════════
 
   let labelColor: string | null = null
+
+  // Strategy A0: AI accent (even if AI BG was rejected)
+  if (!labelColor && aiAccentOnly) {
+    if (wcagContrastRatio(aiAccentOnly, bg) >= 3.0) {
+      labelColor = aiAccentOnly
+      log(`Label: using AI accent (BG-rejected) ${aiAccentOnly}`)
+    } else {
+      const lightened = ensureLabelContrast(aiAccentOnly, bg)
+      if (wcagContrastRatio(lightened, bg) >= 3.0) {
+        labelColor = lightened
+        log(`Label: using lightened AI accent ${aiAccentOnly} → ${lightened}`)
+      }
+    }
+  }
 
   // Strategy A: Brand accent from CSS (if WCAG ≥ 3:1 on BG)
   if (!labelColor && accent) {

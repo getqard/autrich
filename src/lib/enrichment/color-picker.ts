@@ -135,36 +135,42 @@ export async function pickBrandColors(
     // ─── Post-Validation ───────────────────────────────────
     const bgLum = hexLuminance(background)
     const bgSat = colorSaturation(background)
+    const validAccent = accent && isValidHex(accent) ? accent.toLowerCase() : null
+    let bgRejected = false
 
     // Reject too dark (near-black)
     if (bgLum < 0.05) {
-      console.log(`[AI Color Picker] Rejected: too dark (lum=${bgLum.toFixed(3)})`)
-      return null
+      console.log(`[AI Color Picker] BG rejected: too dark (lum=${bgLum.toFixed(3)})`)
+      bgRejected = true
     }
     // Reject too bright
-    if (bgLum > 0.85) {
-      console.log(`[AI Color Picker] Rejected: too bright (lum=${bgLum.toFixed(3)})`)
-      return null
-    }
-    // Reject desaturated darks (gray-ish)
-    if (bgSat < 0.08 && bgLum < 0.4) {
-      console.log(`[AI Color Picker] Rejected: desaturated dark (sat=${bgSat.toFixed(3)}, lum=${bgLum.toFixed(3)})`)
-      return null
+    if (!bgRejected && bgLum > 0.85) {
+      console.log(`[AI Color Picker] BG rejected: too bright (lum=${bgLum.toFixed(3)})`)
+      bgRejected = true
     }
     // Reject if BG ≈ logo color (logo would be invisible)
-    if (context.logoContentColor) {
+    if (!bgRejected && context.logoContentColor) {
       const dist = perceptualDistance(background, context.logoContentColor)
       if (dist < 100) {
-        console.log(`[AI Color Picker] Rejected: too close to logo color (dist=${dist.toFixed(1)})`)
-        return null
+        console.log(`[AI Color Picker] BG rejected: too close to logo color (dist=${dist.toFixed(1)})`)
+        bgRejected = true
       }
+    }
+
+    if (bgRejected) {
+      // BG is bad, but keep accent if it's good
+      if (validAccent) {
+        console.log(`[AI Color Picker] BG rejected but keeping accent=${validAccent}`)
+        return { background: '', accent: validAccent, confidence: 0 }
+      }
+      return null
     }
 
     console.log(`[AI Color Picker] background=${background}, accent=${accent}, confidence=${confidence}`)
 
     return {
       background: background.toLowerCase(),
-      accent: accent && isValidHex(accent) ? accent.toLowerCase() : null,
+      accent: validAccent,
       confidence,
     }
   } catch (err) {
