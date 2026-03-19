@@ -348,99 +348,135 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   const blackContrast = contrastRatio(bgLum, 0.0)
   const textColor = whiteContrast >= blackContrast ? '#ffffff' : '#000000'
 
-  // ═══ LABEL COLOR (brand-aware) ═════════════════════════════
+  // ═══ LABEL COLOR (score-based selection) ═════════════════════
 
-  let labelColor: string | null = null
+  // Known CSS framework colors — penalize as they're not brand-specific
+  const FRAMEWORK_COLORS = new Set([
+    '#007bff', '#0d6efd', '#6c757d', '#28a745', '#198754',
+    '#dc3545', '#ffc107', '#17a2b8', '#0dcaf0', '#5cb85c',
+    '#d9534f', '#f0ad4e', '#5bc0de', '#0075ff',
+  ])
 
-  // Strategy A0: AI accent (even if AI BG was rejected)
-  if (!labelColor && aiAccentOnly) {
-    if (wcagContrastRatio(aiAccentOnly, bg) >= 3.0) {
-      labelColor = aiAccentOnly
-      log(`Label: using AI accent (BG-rejected) ${aiAccentOnly}`)
-    } else {
-      const lightened = ensureLabelContrast(aiAccentOnly, bg)
-      if (wcagContrastRatio(lightened, bg) >= 3.0) {
-        labelColor = lightened
-        log(`Label: using lightened AI accent ${aiAccentOnly} → ${lightened}`)
-      }
+  type LabelCandidate = { hex: string; confidence: number; source: string }
+
+  // ── Collect ALL label candidates into a single pool ──
+  const labelPool: LabelCandidate[] = []
+
+  // All CSS candidates (except the chosen BG)
+  for (const c of cssCandidates) {
+    if (c.hex.toLowerCase() === bg.toLowerCase()) continue
+    if (perceptualDistance(c.hex, bg) < 30) continue // too close to BG
+    labelPool.push({ hex: c.hex, confidence: c.confidence, source: c.source })
+  }
+
+  // AI accent — as a normal candidate, NOT prioritized (conf=0.5)
+  if (accent && !labelPool.some(c => c.hex.toLowerCase() === accent!.toLowerCase())) {
+    labelPool.push({ hex: accent, confidence: 0.5, source: 'ai-accent' })
+  }
+  if (aiAccentOnly && !labelPool.some(c => c.hex.toLowerCase() === aiAccentOnly!.toLowerCase())) {
+    labelPool.push({ hex: aiAccentOnly, confidence: 0.5, source: 'ai-accent-only' })
+  }
+
+  // Logo color (if saturated enough)
+  if (logoColor && logoColor.saturation >= 0.08) {
+    if (!labelPool.some(c => c.hex.toLowerCase() === logoColor!.hex.toLowerCase())) {
+      labelPool.push({ hex: logoColor.hex, confidence: 0.6, source: 'logo-content' })
     }
   }
 
-  // Strategy A: Brand accent from CSS (if WCAG ≥ 3:1 on BG)
-  if (!labelColor && accent) {
-    if (wcagContrastRatio(accent, bg) >= 3.0) {
-      labelColor = accent
-    }
-  }
-
-  // Also check ALL CSS candidates for saturated brand colors (not just accent-role)
-  // Prefer: saturated colors (red, orange, blue) over grays
-  if (!labelColor) {
-    const labelCandidates = cssCandidates
-      .filter(c => c.hex !== bg && perceptualDistance(c.hex, bg!) > 60)
-      .map(c => ({ ...c, sat: colorSaturation(c.hex) }))
-      .sort((a, b) => {
-        // Highly saturated first, then by confidence
-        if (a.sat >= 0.3 && b.sat < 0.3) return -1
-        if (b.sat >= 0.3 && a.sat < 0.3) return 1
-        return b.confidence - a.confidence
-      })
-
-    for (const c of labelCandidates) {
-      if (wcagContrastRatio(c.hex, bg) >= 3.0) {
-        labelColor = c.hex
-        log(`Label: CSS candidate ${c.hex} (sat=${c.sat.toFixed(2)}, ${c.source})`)
-        break
-      }
-      // Try adjusting for WCAG
-      const adjusted = ensureLabelContrast(c.hex, bg)
-      if (wcagContrastRatio(adjusted, bg) >= 3.0 && colorSaturation(adjusted) >= 0.15) {
-        labelColor = adjusted
-        log(`Label: adjusted CSS candidate ${c.hex} → ${adjusted}`)
-        break
-      }
-    }
-  }
-
-  // Strategy B: Logo color as label (if ≠ BG + WCAG ≥ 3:1)
-  // Skip if logo color is desaturated (gray) — not a brand signal
-  if (!labelColor && logoColor && logoColor.saturation >= 0.08) {
-    const dist = perceptualDistance(logoColor.hex, bg)
-    if (dist > 80 && wcagContrastRatio(logoColor.hex, bg) >= 3.0) {
-      labelColor = logoColor.hex
-    }
-  }
-
-  // Strategy C: HSL derivation from background (or any saturated source)
-  if (!labelColor) {
+  // HSL derivation from BG as a fallback candidate
+  {
     const bgHsl = hexToHsl(bg)
-    // If BG is neutral/desaturated, try to borrow hue from a CSS candidate
     let sourceHsl = bgHsl
     if (bgHsl.s < 0.1) {
-      // Look for any saturated CSS candidate to borrow hue from
       const saturatedCandidate = cssCandidates
         .filter(c => colorSaturation(c.hex) > 0.2)
         .sort((a, b) => b.confidence - a.confidence)[0]
       if (saturatedCandidate) {
         sourceHsl = hexToHsl(saturatedCandidate.hex)
       } else if (websiteContext.themeColor) {
-        // Try theme-color meta tag
         const themeSat = colorSaturation(websiteContext.themeColor)
-        if (themeSat > 0.15) {
-          sourceHsl = hexToHsl(websiteContext.themeColor)
-        }
+        if (themeSat > 0.15) sourceHsl = hexToHsl(websiteContext.themeColor)
       }
     }
     const targetL = bgHsl.l < 0.5 ? 0.6 : 0.35
     const derived = hslToHex(sourceHsl.h, Math.max(sourceHsl.s, 0.15), targetL)
-    if (wcagContrastRatio(derived, bg) >= 3.0) {
-      labelColor = derived
+    labelPool.push({ hex: derived, confidence: 0.3, source: 'hsl-derived' })
+  }
+
+  // ── Score each candidate ──
+  function scoreLabelCandidate(hex: string, conf: number): { total: number; breakdown: string } {
+    const sat = colorSaturation(hex)
+    const wcag = wcagContrastRatio(hex, bg!)
+    const lum = hexLuminance(hex)
+
+    // Saturation: most important factor (colorful labels)
+    const satScore = sat * 35
+
+    // Confidence from CSS extraction
+    const confScore = conf * 25
+
+    // Cluster bonus: how many other pool candidates have similar color?
+    // Multiple similar colors = strong brand signal
+    let clusterCount = 0
+    for (const other of labelPool) {
+      if (other.hex.toLowerCase() === hex.toLowerCase()) continue
+      if (perceptualDistance(hex, other.hex) < 50) clusterCount++
+    }
+    const clusterNorm = Math.min(clusterCount / 3, 1.0)
+    const clusterScore = clusterNorm * 25
+
+    // WCAG bonus: reward readable labels
+    const wcagScore = wcag >= 3.0 ? 15 : (wcag >= 2.5 ? 8 : 0)
+
+    let total = satScore + confScore + clusterScore + wcagScore
+
+    // Penalties
+    const isNearWhite = lum > 0.85
+    const isNearBlack = lum < 0.08
+    if (isNearWhite || isNearBlack || sat < 0.1) total -= 15
+    if (FRAMEWORK_COLORS.has(hex.toLowerCase())) total -= 10
+
+    const breakdown = `sat=${sat.toFixed(2)}×35=${satScore.toFixed(0)} conf=${conf.toFixed(2)}×25=${confScore.toFixed(0)} cluster=${clusterCount}→${clusterScore.toFixed(0)} wcag=${wcag.toFixed(1)}→${wcagScore} penalties=${(isNearWhite || isNearBlack || sat < 0.1 ? -15 : 0) + (FRAMEWORK_COLORS.has(hex.toLowerCase()) ? -10 : 0)}`
+
+    return { total, breakdown }
+  }
+
+  // Score all candidates
+  const scored = labelPool.map(c => {
+    const { total, breakdown } = scoreLabelCandidate(c.hex, c.confidence)
+    return { ...c, score: total, breakdown }
+  }).sort((a, b) => b.score - a.score)
+
+  // Log top 3
+  const top3 = scored.slice(0, 3)
+  log(`Label scores (${scored.length} candidates):`)
+  for (const c of top3) {
+    log(`  ${c.hex} score=${c.score.toFixed(0)} [${c.breakdown}] (${c.source})`)
+  }
+
+  // Pick best candidate that passes WCAG (or can be adjusted)
+  let labelColor: string | null = null
+  for (const c of scored) {
+    // Try raw first
+    if (wcagContrastRatio(c.hex, bg) >= 3.0) {
+      labelColor = c.hex
+      log(`Label: picked ${c.hex} (score=${c.score.toFixed(0)}, ${c.source})`)
+      break
+    }
+    // Try adjusting for WCAG
+    const adjusted = ensureLabelContrast(c.hex, bg)
+    if (wcagContrastRatio(adjusted, bg) >= 3.0 && colorSaturation(adjusted) >= 0.15) {
+      labelColor = adjusted
+      log(`Label: adjusted ${c.hex} → ${adjusted} (score=${c.score.toFixed(0)}, ${c.source})`)
+      break
     }
   }
 
-  // Strategy D: Fallback mix
+  // Fallback: mix of bg and text
   if (!labelColor) {
     labelColor = mixColors(bg, textColor, 0.35)
+    log(`Label: fallback mix`)
   }
 
   // Ensure label passes WCAG
@@ -449,7 +485,6 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   // Ensure label ≠ foreground
   if (labelColor === textColor) {
     const hsl = hexToHsl(labelColor)
-    // Shift slightly toward background hue
     const bgHsl = hexToHsl(bg)
     labelColor = hslToHex(bgHsl.h, Math.max(0.15, bgHsl.s), hsl.l)
     labelColor = ensureLabelContrast(labelColor, bg)

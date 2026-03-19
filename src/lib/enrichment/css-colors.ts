@@ -286,6 +286,24 @@ function extractFromCSSVars(css: string): ColorCandidate[] {
     }
   }
 
+  // Elementor numbered palette (4-7 = custom designer colors, 0-3 already captured above)
+  const elementorNumbered = /--e-global-color-(\d+)\s*:\s*([^;}\n]+)/gi
+  let elMatch
+  while ((elMatch = elementorNumbered.exec(css)) !== null) {
+    const idx = parseInt(elMatch[1], 10)
+    if (idx < 4 || idx > 7) continue // 0-3 already captured as primary/secondary/text/accent
+    const hex = parseCSSColor(elMatch[2])
+    if (!hex || isUselessColor(hex)) continue
+    if (candidates.some(c => c.hex === hex)) continue
+    const sat = colorSaturation(hex)
+    candidates.push({
+      hex,
+      role: sat > 0.3 ? 'accent' : 'background',
+      source: `css-var:elementor-palette-${idx}`,
+      confidence: 0.88,
+    })
+  }
+
   // WordPress preset colors — collect ALL custom (non-default) palette entries
   // These are theme-specific additions beyond the WordPress defaults
   const wpPresetRegex = /--wp--preset--color--([\w-]+)\s*:\s*([^;}\n]+)/gi
@@ -400,6 +418,13 @@ function extractFromInlineStyles(html: string): ColorCandidate[] {
   return candidates
 }
 
+// Common CSS framework colors — should not be treated as brand colors
+const FRAMEWORK_COLORS = new Set([
+  '#007bff', '#0d6efd', '#6c757d', '#28a745', '#198754',
+  '#dc3545', '#ffc107', '#17a2b8', '#0dcaf0', '#5cb85c',
+  '#d9534f', '#f0ad4e', '#5bc0de', '#0075ff',
+])
+
 /**
  * Source 1d: ALL background-color declarations in style blocks
  * Simple broad scan — catches things the selector-based approach misses
@@ -424,12 +449,15 @@ function extractFromStyleRules(css: string): ColorCandidate[] {
       const isStructural = /(?:body|header|nav|footer|\.header|\.navbar|\.site-header|\.main-header|#masthead|#header|\.hero|\.top-bar|\.footer)/i.test(selector)
       const isButton = /(?:\.btn|\.button|\.cta|a\b|\.wp-block-button)/i.test(selector)
 
+      // Framework color penalty
+      const frameworkPenalty = FRAMEWORK_COLORS.has(hex.toLowerCase()) ? 0.6 : 1.0
+
       if (isButton) {
         candidates.push({
           hex,
           role: 'accent',
           source: `css-rule:${selector.substring(selector.length - 40).trim()}`,
-          confidence: isNearBlack(hex) ? 0.55 : 0.68,
+          confidence: (isNearBlack(hex) ? 0.55 : 0.68) * frameworkPenalty,
         })
       } else {
         candidates.push({
@@ -438,9 +466,9 @@ function extractFromStyleRules(css: string): ColorCandidate[] {
           source: isStructural
             ? `css-rule:${selector.substring(selector.length - 40).trim()}`
             : `css-rule:background`,
-          confidence: isStructural
+          confidence: (isStructural
             ? (isNearBlack(hex) ? 0.6 : 0.75)
-            : (isNearBlack(hex) ? 0.5 : 0.58),
+            : (isNearBlack(hex) ? 0.5 : 0.58)) * frameworkPenalty,
         })
       }
     }
