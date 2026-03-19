@@ -41,7 +41,7 @@ type EnrichmentPreview = {
   logo: { base64: string; source: string } | null
   colors: { dominant: string; accent: string | null; textColor: string; labelColor: string; swatches: VibrantSwatch[] } | null
   industry: { slug: string; method: string; gmapsCategory: string | null; emoji: string | null; defaultReward: string | null } | null
-  passPreview: { bg: string; text: string; label: string } | null
+  passPreview: { bg: string; text: string; label: string; method?: string } | null
 }
 
 type ScrapeResult = {
@@ -252,7 +252,14 @@ export default function ScraperPage() {
               {/* Pass Preview */}
               {ep.passPreview && ep.logo && (
                 <div className="mt-5">
-                  <p className="text-[10px] text-zinc-600 mb-2 uppercase tracking-wide">Pass-Vorschau</p>
+                  <div className="flex items-center gap-2 mb-2">
+                    <p className="text-[10px] text-zinc-600 uppercase tracking-wide">Pass-Vorschau</p>
+                    {ep.passPreview.method && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">
+                        {ep.passPreview.method}
+                      </span>
+                    )}
+                  </div>
                   <div
                     className="inline-flex items-center gap-3 px-5 py-3 rounded-xl border border-zinc-700"
                     style={{ backgroundColor: ep.passPreview.bg }}
@@ -268,6 +275,23 @@ export default function ScraperPage() {
                     <div>
                       <p className="text-sm font-semibold" style={{ color: ep.passPreview.text }}>Treuekarte</p>
                       <p className="text-[10px]" style={{ color: ep.passPreview.label }}>10 Stempel</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3 mt-2">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-4 h-4 rounded border border-zinc-600" style={{ backgroundColor: ep.passPreview.bg }} />
+                      <span className="text-[9px] font-mono text-zinc-500">{ep.passPreview.bg}</span>
+                      <span className="text-[9px] text-zinc-600">BG</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-4 h-4 rounded border border-zinc-600" style={{ backgroundColor: ep.passPreview.label }} />
+                      <span className="text-[9px] font-mono text-zinc-500">{ep.passPreview.label}</span>
+                      <span className="text-[9px] text-zinc-600">Label</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-4 h-4 rounded border border-zinc-600" style={{ backgroundColor: ep.passPreview.text }} />
+                      <span className="text-[9px] font-mono text-zinc-500">{ep.passPreview.text}</span>
+                      <span className="text-[9px] text-zinc-600">Text</span>
                     </div>
                   </div>
                 </div>

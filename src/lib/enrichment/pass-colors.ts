@@ -125,6 +125,10 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     gmapsPhotoBuffer,
   } = input
 
+  const log = (msg: string) => console.log(`[PassColors] ${msg}`)
+
+  log(`Input: ${cssCandidates.length} CSS candidates, headerBG=${headerBackground}, logo=${logoBuffer ? `${logoBuffer.length}B` : 'null'}, industry=${industrySlug}`)
+
   // Rasterize logo if needed
   let rasterLogo: Buffer | null = null
   if (logoBuffer) {
@@ -140,8 +144,20 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   let palette: PaletteResult | null = null
 
   if (rasterLogo) {
-    try { logoColor = await extractLogoContentColor(rasterLogo) } catch { /* non-fatal */ }
-    try { palette = await extractPalette(rasterLogo) } catch { /* non-fatal */ }
+    try {
+      logoColor = await extractLogoContentColor(rasterLogo)
+      log(`Logo content color: ${logoColor ? `${logoColor.hex} (lum=${logoColor.luminance.toFixed(2)}, sat=${logoColor.saturation.toFixed(2)})` : 'null (too few pixels)'}`)
+    } catch (err) {
+      log(`Logo content color FAILED: ${err instanceof Error ? err.message : err}`)
+    }
+    try {
+      palette = await extractPalette(rasterLogo)
+      log(`Palette: dominant=${palette.dominant} (boring=${isBoringColor(palette.dominant)}), accent=${palette.accent}, swatches=${palette.swatches.length}`)
+    } catch (err) {
+      log(`Palette FAILED: ${err instanceof Error ? err.message : err}`)
+    }
+  } else {
+    log('No logo buffer available — skipping color extraction')
   }
 
   let bg: string | null = null
@@ -164,19 +180,31 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         bg = aiColors.background
         accent = aiColors.accent
         method = 'ai-picker'
+        log(`STEP 1 ✓ AI Picker: bg=${bg}, accent=${accent}, conf=${aiColors.confidence}`)
+      } else {
+        log(`STEP 1 ✗ AI Picker: ${aiColors ? `conf=${aiColors.confidence} (< 0.7)` : 'returned null (no API key or post-validation rejected)'}`)
       }
-    } catch { /* non-fatal */ }
+    } catch (err) {
+      log(`STEP 1 ✗ AI Picker ERROR: ${err instanceof Error ? err.message : err}`)
+    }
+  } else {
+    log('STEP 1 ✗ AI Picker: no logo')
   }
 
   // ─── STEP 2: Header Background ────────────────────────────
   if (!bg && headerBackground) {
-    // Only use if logo is visible on this background
     const logoVisible = !logoColor || perceptualDistance(headerBackground, logoColor.hex) > 130
+    const dist = logoColor ? perceptualDistance(headerBackground, logoColor.hex) : -1
     if (logoVisible) {
       const lum = hexLuminance(headerBackground)
       bg = lum <= 0.45 ? ensurePassSuitable(headerBackground) : darkenHSL(headerBackground, 0.2)
       method = 'header-bg'
+      log(`STEP 2 ✓ Header BG: ${headerBackground} → ${bg} (logoDist=${dist.toFixed(0)})`)
+    } else {
+      log(`STEP 2 ✗ Header BG: ${headerBackground} too close to logo (dist=${dist.toFixed(0)} < 130)`)
     }
+  } else if (!bg) {
+    log(`STEP 2 ✗ Header BG: ${headerBackground ? 'skipped (already have bg)' : 'not found'}`)
   }
 
   // ─── STEP 3: Brand Palette Contrast Selection ─────────────
@@ -190,31 +218,47 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
       else if (dist < 100) labelCandidates.push({ ...c, dist })
     }
 
+    log(`STEP 3: ${bgCandidates.length} BG candidates (dist>130), ${labelCandidates.length} label candidates (dist<100)`)
+
     if (bgCandidates.length > 0) {
-      // Pick the darkest contrasting candidate
       bgCandidates.sort((a, b) => hexLuminance(a.hex) - hexLuminance(b.hex))
       bg = ensurePassSuitable(bgCandidates[0].hex)
-      // Use a logo-similar color as accent if available
       accent = labelCandidates[0]?.hex ?? null
       method = 'css-contrast'
+      log(`STEP 3 ✓ CSS Contrast: ${bgCandidates[0].hex} → ${bg}, accent=${accent}`)
+    } else {
+      log(`STEP 3 ✗ No CSS candidates with enough distance to logo`)
     }
+  } else if (!bg) {
+    log(`STEP 3 ✗ CSS Contrast: ${cssCandidates.length === 0 ? 'no CSS candidates' : 'no logo color'}`)
   }
 
   // ─── STEP 4: CSS Direct (no logo color available) ─────────
   if (!bg && cssCandidates.length > 0) {
-    const bestCSS = cssCandidates
-      .filter(c => c.role === 'background' && c.confidence >= 0.6 && hexLuminance(c.hex) <= 0.9)
-      .sort((a, b) => b.confidence - a.confidence)[0]
+    const eligible = cssCandidates.filter(c => c.role === 'background' && c.confidence >= 0.6 && hexLuminance(c.hex) <= 0.9)
+    const bestCSS = eligible.sort((a, b) => b.confidence - a.confidence)[0]
     if (bestCSS) {
       bg = ensurePassSuitable(bestCSS.hex)
       method = 'css-direct'
+      log(`STEP 4 ✓ CSS Direct: ${bestCSS.hex} (conf=${bestCSS.confidence.toFixed(2)}) → ${bg}`)
+    } else {
+      log(`STEP 4 ✗ CSS Direct: ${eligible.length} eligible of ${cssCandidates.filter(c => c.role === 'background').length} bg candidates (need conf≥0.6 + lum≤0.9)`)
+      // Debug: show why candidates were rejected
+      for (const c of cssCandidates.filter(c => c.role === 'background').slice(0, 5)) {
+        log(`  → ${c.hex} conf=${c.confidence.toFixed(2)} lum=${hexLuminance(c.hex).toFixed(2)} src=${c.source}`)
+      }
     }
+  } else if (!bg) {
+    log(`STEP 4 ✗ CSS Direct: no candidates`)
   }
 
   // ─── STEP 5: Logo Color Darkened ──────────────────────────
   if (!bg && logoColor && logoColor.saturation >= 0.1) {
     bg = darkenHSL(logoColor.hex, 0.15)
     method = 'logo-darkened'
+    log(`STEP 5 ✓ Logo Darkened: ${logoColor.hex} → ${bg}`)
+  } else if (!bg) {
+    log(`STEP 5 ✗ Logo Darkened: ${logoColor ? `sat=${logoColor.saturation.toFixed(2)} (< 0.1)` : 'no logo color'}`)
   }
 
   // ─── STEP 6: Vibrant Palette ──────────────────────────────
@@ -223,16 +267,21 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
       bg = ensurePassSuitable(palette.dominant)
       accent = palette.accent
       method = 'vibrant-palette'
+      log(`STEP 6 ✓ Vibrant Palette: ${palette.dominant} → ${bg}`)
     } else {
-      // Try most saturated swatch
       const bestSwatch = palette.swatches
         .filter(s => s.saturation >= 0.15)
         .sort((a, b) => b.saturation - a.saturation)[0]
       if (bestSwatch) {
         bg = ensurePassSuitable(bestSwatch.hex)
         method = 'vibrant-swatch'
+        log(`STEP 6 ✓ Vibrant Swatch: ${bestSwatch.hex} (sat=${bestSwatch.saturation.toFixed(2)}) → ${bg}`)
+      } else {
+        log(`STEP 6 ✗ Vibrant: dominant boring, no saturated swatches (${palette.swatches.map(s => `${s.hex}:${s.saturation.toFixed(2)}`).join(', ')})`)
       }
     }
+  } else if (!bg) {
+    log(`STEP 6 ✗ Vibrant: no palette`)
   }
 
   // ─── STEP 7: GMaps Photo ──────────────────────────────────
@@ -243,8 +292,13 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         bg = ensurePassSuitable(photoPalette.dominant)
         accent = photoPalette.accent
         method = 'gmaps-photo'
+        log(`STEP 7 ✓ GMaps Photo: ${photoPalette.dominant} → ${bg}`)
+      } else {
+        log(`STEP 7 ✗ GMaps Photo: dominant ${photoPalette.dominant} is boring`)
       }
-    } catch { /* non-fatal */ }
+    } catch { log('STEP 7 ✗ GMaps Photo: extraction failed') }
+  } else if (!bg) {
+    log(`STEP 7 ✗ GMaps Photo: ${gmapsPhotoBuffer ? 'skipped' : 'no buffer'}`)
   }
 
   // ─── STEP 8: Industry Default ─────────────────────────────
@@ -252,12 +306,16 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     bg = industryDefaults.default_color
     accent = industryDefaults.default_accent ?? null
     method = 'industry-default'
+    log(`STEP 8 ✓ Industry Default: bg=${bg}, accent=${accent}`)
+  } else if (!bg) {
+    log(`STEP 8 ✗ Industry Default: ${industryDefaults ? 'no default_color' : 'no industry'}`)
   }
 
   // ─── STEP 9: Fallback ────────────────────────────────────
   if (!bg) {
     bg = '#1a1a2e'
     method = 'fallback'
+    log('STEP 9 → Fallback #1a1a2e')
   }
 
   // ═══ FOREGROUND (text) ═════════════════════════════════════
@@ -326,6 +384,8 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     labelColor = hslToHex(bgHsl.h, Math.max(0.15, bgHsl.s), hsl.l)
     labelColor = ensureLabelContrast(labelColor, bg)
   }
+
+  log(`RESULT: bg=${bg} text=${textColor} label=${labelColor} method=${method}`)
 
   // ═══ FINAL VALIDATION ══════════════════════════════════════
 
