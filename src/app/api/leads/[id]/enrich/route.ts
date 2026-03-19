@@ -3,13 +3,12 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { processLogo, validateLogoCandidate, fetchGoogleFavicon, generateInitialsLogo } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
-import { extractPalette, extractLogoContentColor, colorDistance, derivePassColors, adjustBgForContrast, isBoringColor, hexLuminance, darkenColor } from '@/lib/enrichment/colors'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
-import { pickBrandColors } from '@/lib/enrichment/color-picker'
 import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGmapsPhoto, cropToSquare } from '@/lib/enrichment/gmaps-photo'
 import { classifyIndustry, classifyBusiness, generateCreativeContent } from '@/lib/ai/classifier'
 import { calculateLeadScore } from '@/lib/enrichment/score'
+import { determinePassColors } from '@/lib/enrichment/pass-colors'
 import { INDUSTRIES } from '@/data/industries-seed'
 
 export async function POST(
@@ -283,160 +282,44 @@ export async function POST(
       console.error('Logo processing failed:', err)
     }
 
-    // ─── 4. COLOR WATERFALL ─────────────────────────────────
-    // 1. AI Color Picker (Haiku Vision) — looks at logo + CSS candidates
-    // 2. CSS Brand Colors — only if colorful (not black/gray/white)
-    // 3. Logo Palette (node-vibrant) — smart swatch selection
-    // 4. GMaps photo palette
-    // 5. Industry Default
-    // 6. Fallback #1a1a2e
+    // ─── 4. COLOR DETERMINATION (unified) ────────────────────
 
-    let bgHex: string | null = null
-    let accentHex: string | null = null
-
-    // Always extract vibrant palette from logo (needed for fallback + extra_data)
-    if (logoBuffer) {
-      try {
-        const palette = await extractPalette(logoBuffer)
-        // Store full palette in extra_data
-        const extra = (updateData.extra_data as Record<string, unknown>) || existingExtra
-        updateData.extra_data = { ...extra, vibrant_swatches: palette.swatches }
-      } catch (err) {
-        console.error('Vibrant extraction failed (non-fatal):', err)
-      }
-    }
-
-    // 4a. AI Color Picker (Haiku Vision)
-    if (logoBuffer) {
-      try {
-        const aiColors = await pickBrandColors(
-          logoBuffer,
-          {
-            title: scrapeResult?.title ?? lead.business_name,
-            description: scrapeResult?.description ?? lead.website_description,
-            themeColor: scrapeResult?.themeColor ?? null,
-          },
-          scrapeResult?.brandColors?.candidates || [],
-        )
-        if (aiColors && aiColors.confidence >= 0.7) {
-          bgHex = aiColors.background
-          accentHex = aiColors.accent
-        }
-      } catch (err) {
-        console.error('AI Color Picker failed (non-fatal):', err)
-      }
-    }
-
-    // 4b. Contrast-based CSS color selection (Logo ↔ CSS)
-    let logoColor: Awaited<ReturnType<typeof extractLogoContentColor>> = null
-    if (logoBuffer) {
-      try {
-        logoColor = await extractLogoContentColor(logoBuffer)
-      } catch { /* non-fatal */ }
-    }
-
-    if (!bgHex && scrapeResult?.brandColors?.candidates?.length && logoColor) {
-      const ranked = scrapeResult.brandColors.candidates
-        .map(c => ({ ...c, contrast: colorDistance(c.hex, logoColor!.hex) }))
-        .sort((a, b) => b.contrast - a.contrast)
-
-      const best = ranked[0]
-      if (best && best.contrast > 80) {
-        const lum = hexLuminance(best.hex)
-        if (lum < 0.4) {
-          bgHex = best.hex
-        } else {
-          bgHex = darkenColor(best.hex, Math.min(0.5, (lum - 0.25) / lum))
-        }
-        const second = ranked.find(c => c.hex !== best.hex)
-        accentHex = second?.hex || logoColor.hex
-      }
-    }
-
-    // 4b2. CSS Brand Colors fallback (no logo color available)
-    if (!bgHex && scrapeResult?.brandColors && (scrapeResult.brandColors.confidence ?? 0) >= 0.6 && scrapeResult.brandColors.backgroundColor) {
-      if (!isBoringColor(scrapeResult.brandColors.backgroundColor)) {
-        bgHex = scrapeResult.brandColors.backgroundColor
-        accentHex = scrapeResult.brandColors.accentColor
-      }
-    }
-
-    // 4b3. Logo color as background (darken if needed)
-    if (!bgHex && logoColor && logoColor.saturation >= 0.15) {
-      const lum = logoColor.luminance
-      if (lum > 0.4) {
-        bgHex = darkenColor(logoColor.hex, Math.min(0.6, (lum - 0.25) / lum))
-      } else {
-        bgHex = logoColor.hex
-      }
-    }
-
-    // 4c. node-vibrant from logo (extractPalette now trims + saturation-ranks)
-    let logoPalette: Awaited<ReturnType<typeof extractPalette>> | null = null
-    if (!bgHex && logoBuffer) {
-      try {
-        logoPalette = await extractPalette(logoBuffer)
-        if (!isBoringColor(logoPalette.dominant)) {
-          bgHex = logoPalette.dominant
-          accentHex = logoPalette.accent
-        }
-      } catch (err) {
-        console.error('Vibrant extraction failed (non-fatal):', err)
-      }
-    }
-
-    // 4c2. Any saturated swatch (when dominant was still boring)
-    if (!bgHex && logoPalette?.swatches?.length) {
-      const bestSaturated = logoPalette.swatches
-        .filter(s => s.saturation >= 0.15)
-        .sort((a, b) => b.saturation - a.saturation)[0]
-      if (bestSaturated) {
-        const lum = hexLuminance(bestSaturated.hex)
-        bgHex = lum > 0.4
-          ? darkenColor(bestSaturated.hex, Math.min(0.6, (lum - 0.25) / lum))
-          : bestSaturated.hex
-      }
-    }
-
-    // 4d. node-vibrant from GMaps photo
-    if (!bgHex && lead.gmaps_photos?.length > 0) {
+    // Fetch GMaps photo buffer for color extraction (if no logo found)
+    let gmapsPhotoBuffer: Buffer | null = null
+    if (lead.gmaps_photos?.length > 0) {
       try {
         const photo = await fetchGmapsPhoto(lead.gmaps_photos[0])
-        if (photo) {
-          const palette = await extractPalette(photo)
-          if (!isBoringColor(palette.dominant)) {
-            bgHex = palette.dominant
-            accentHex = palette.accent
-          }
-        }
+        if (photo) gmapsPhotoBuffer = photo
       } catch (err) {
-        console.error('GMaps photo color extraction failed (non-fatal):', err)
+        console.error('GMaps photo fetch failed (non-fatal):', err)
       }
     }
 
-    // 4e. Industry default
-    if (!bgHex) {
-      bgHex = industryDefaults?.default_color || '#1a1a2e'
-      accentHex = industryDefaults?.default_accent || null
+    const passColors = await determinePassColors({
+      logoBuffer,
+      cssCandidates: scrapeResult?.brandColors?.candidates || [],
+      headerBackground: scrapeResult?.brandColors?.headerBackground ?? null,
+      websiteContext: {
+        title: scrapeResult?.title ?? lead.business_name,
+        description: scrapeResult?.description ?? lead.website_description,
+        themeColor: scrapeResult?.themeColor ?? null,
+      },
+      industrySlug: industry,
+      industryDefaults: industryDefaults ?? null,
+      gmapsPhotoBuffer,
+    })
+
+    updateData.dominant_color = passColors.backgroundColor
+    updateData.text_color = passColors.textColor
+    updateData.label_color = passColors.labelColor
+    if (passColors.accentColor) {
+      updateData.accent_color = passColors.accentColor
     }
 
-    if (accentHex) {
-      updateData.accent_color = accentHex
-    }
-
-    // Derive pass colors with WCAG contrast check
-    const passColors = await derivePassColors(bgHex, accentHex, logoBuffer)
-
-    if (passColors.logoContrast === 'low') {
-      const adjusted = adjustBgForContrast(bgHex)
-      const adjustedPassColors = await derivePassColors(adjusted, accentHex, logoBuffer)
-      updateData.dominant_color = adjusted
-      updateData.text_color = adjustedPassColors.foregroundColor
-      updateData.label_color = adjustedPassColors.labelColor
-    } else {
-      updateData.dominant_color = passColors.backgroundColor
-      updateData.text_color = passColors.foregroundColor
-      updateData.label_color = passColors.labelColor
+    // Store palette in extra_data
+    if (passColors.palette) {
+      const extra = (updateData.extra_data as Record<string, unknown>) || existingExtra
+      updateData.extra_data = { ...extra, vibrant_swatches: passColors.palette.swatches, color_method: passColors.method }
     }
 
     // ─── 5. AI CREATIVE CONTENT ─────────────────────────────

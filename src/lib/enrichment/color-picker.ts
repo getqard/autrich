@@ -10,6 +10,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import sharp from 'sharp'
 import type { ColorCandidate } from './types'
+import { hexLuminance, colorSaturation, perceptualDistance } from './colors'
 
 export type AIColorResult = {
   background: string
@@ -24,6 +25,7 @@ export type AIColorResult = {
  * - No ANTHROPIC_API_KEY
  * - API call fails
  * - AI confidence < 0.5
+ * - Post-validation rejects the result
  */
 export async function pickBrandColors(
   logoBuffer: Buffer,
@@ -31,6 +33,8 @@ export async function pickBrandColors(
     title: string | null
     description: string | null
     themeColor: string | null
+    headerBackground?: string | null
+    logoContentColor?: string | null
   },
   cssCandidates: ColorCandidate[],
 ): Promise<AIColorResult | null> {
@@ -55,19 +59,25 @@ export async function pickBrandColors(
     if (context.title) contextParts.push(`Website-Titel: ${context.title}`)
     if (context.description) contextParts.push(`Beschreibung: ${context.description}`)
     if (context.themeColor) contextParts.push(`Theme-Color Meta-Tag: ${context.themeColor}`)
+    if (context.headerBackground) contextParts.push(`Header-Hintergrund der Website: ${context.headerBackground} — Das Logo sitzt auf dieser Farbe!`)
+    if (context.logoContentColor) contextParts.push(`Hauptfarbe des Logos: ${context.logoContentColor} — Background MUSS sich davon unterscheiden!`)
 
     const prompt = [
       'Du siehst das Logo eines Unternehmens und eine Liste von Farben die auf der Website gefunden wurden.',
       '',
-      'Bestimme die beste Hintergrundfarbe für einen Apple Wallet Pass und eine Akzentfarbe.',
+      'Bestimme ZWEI Farben für einen Apple Wallet Pass:',
+      '1. BACKGROUND: Dunkle Farbe auf der das Logo SICHTBAR sein muss (nicht gleiche Farbe wie Logo!)',
+      '2. ACCENT/LABEL: Zweite Brand-Farbe die mit dem Background kontrastiert (für Labels/Beschriftungen)',
       '',
       'Regeln:',
       '- Die Hintergrundfarbe soll eine DUNKLE Version der Hauptbrandfarbe sein (Wallet Passes sehen mit dunklen Farben besser aus)',
       '- Die Akzentfarbe soll eine hellere/kontrastierende Brandfarbe sein für Labels',
+      '- WICHTIG: Hintergrund darf NICHT die gleiche Farbe wie das Logo sein (sonst Logo unsichtbar!)',
       '- Wenn das Logo Gold/Gelb ist → dunkles Gold (#8B6914 oder ähnlich) als Hintergrund',
       '- Wenn das Logo Rot ist → dunkles Rot (#8B1A1A oder ähnlich) als Hintergrund',
       '- Wenn das Logo Blau ist → dunkles Blau (#1A3A6B oder ähnlich) als Hintergrund',
       '- Wenn das Logo Grün ist → dunkles Grün (#1A6B3A oder ähnlich) als Hintergrund',
+      '- Wenn das Logo Weiß/Hell ist → der Website-Header-Hintergrund ist ideal (das Logo sitzt dort bereits!)',
       '- NIEMALS reines Schwarz (#000000) oder fast-schwarz (<#202020) — das ist langweilig',
       '- NIEMALS reines Weiß oder sehr helle Farben (>= #E0E0E0)',
       '- NIEMALS neutrale Grautöne — immer eine Farbe mit Sättigung',
@@ -121,6 +131,34 @@ export async function pickBrandColors(
 
     if (!background || !isValidHex(background)) return null
     if (confidence < 0.5) return null
+
+    // ─── Post-Validation ───────────────────────────────────
+    const bgLum = hexLuminance(background)
+    const bgSat = colorSaturation(background)
+
+    // Reject too dark (near-black)
+    if (bgLum < 0.05) {
+      console.log(`[AI Color Picker] Rejected: too dark (lum=${bgLum.toFixed(3)})`)
+      return null
+    }
+    // Reject too bright
+    if (bgLum > 0.85) {
+      console.log(`[AI Color Picker] Rejected: too bright (lum=${bgLum.toFixed(3)})`)
+      return null
+    }
+    // Reject desaturated darks (gray-ish)
+    if (bgSat < 0.08 && bgLum < 0.4) {
+      console.log(`[AI Color Picker] Rejected: desaturated dark (sat=${bgSat.toFixed(3)}, lum=${bgLum.toFixed(3)})`)
+      return null
+    }
+    // Reject if BG ≈ logo color (logo would be invisible)
+    if (context.logoContentColor) {
+      const dist = perceptualDistance(background, context.logoContentColor)
+      if (dist < 100) {
+        console.log(`[AI Color Picker] Rejected: too close to logo color (dist=${dist.toFixed(1)})`)
+        return null
+      }
+    }
 
     console.log(`[AI Color Picker] background=${background}, accent=${accent}, confidence=${confidence}`)
 

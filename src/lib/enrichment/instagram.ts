@@ -4,7 +4,16 @@
  * Strategy: Fetch the public profile page, extract the og:image meta tag
  * (which is the profile picture), download it, and remove the circular
  * background that Instagram adds.
+ *
+ * Uses multi-UA rotation for reliability.
  */
+
+const USER_AGENTS = [
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+]
+
 export async function fetchInstagramAvatar(handle: string): Promise<Buffer | null> {
   if (!handle) return null
 
@@ -12,6 +21,18 @@ export async function fetchInstagramAvatar(handle: string): Promise<Buffer | nul
   const cleanHandle = handle.replace(/^@/, '').trim()
   if (!cleanHandle || cleanHandle.length < 2) return null
 
+  // Try each UA until one works
+  for (const ua of USER_AGENTS) {
+    try {
+      const result = await tryFetchAvatar(cleanHandle, ua)
+      if (result) return result
+    } catch { /* try next UA */ }
+  }
+
+  return null
+}
+
+async function tryFetchAvatar(cleanHandle: string, userAgent: string): Promise<Buffer | null> {
   try {
     // Fetch Instagram profile page
     const controller = new AbortController()
@@ -20,7 +41,7 @@ export async function fetchInstagramAvatar(handle: string): Promise<Buffer | nul
     const res = await fetch(`https://www.instagram.com/${cleanHandle}/`, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': userAgent,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
       },
@@ -31,9 +52,12 @@ export async function fetchInstagramAvatar(handle: string): Promise<Buffer | nul
 
     const html = await res.text()
 
-    // Extract og:image from meta tags
+    // Extract og:image from meta tags (primary)
+    // Also try twitter:image as fallback
     const ogImageMatch = html.match(/<meta\s+(?:property|name)="og:image"\s+content="([^"]+)"/i)
       || html.match(/content="([^"]+)"\s+(?:property|name)="og:image"/i)
+      || html.match(/<meta\s+(?:property|name)="twitter:image"\s+content="([^"]+)"/i)
+      || html.match(/content="([^"]+)"\s+(?:property|name)="twitter:image"/i)
 
     if (!ogImageMatch?.[1]) return null
 
@@ -109,3 +133,4 @@ export async function fetchInstagramAvatar(handle: string): Promise<Buffer | nul
     return null
   }
 }
+

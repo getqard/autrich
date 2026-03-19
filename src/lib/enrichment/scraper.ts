@@ -17,7 +17,7 @@ export async function scrapeWebsite(inputUrl: string): Promise<WebsiteData> {
     loyaltyDetected: false,
     appDetected: false,
     themeColor: null,
-    brandColors: { backgroundColor: null, accentColor: null, source: null, confidence: 0, candidates: [] },
+    brandColors: { backgroundColor: null, accentColor: null, headerBackground: null, source: null, confidence: 0, candidates: [] },
     scrapeDurationMs: 0,
   }
 
@@ -107,10 +107,17 @@ export async function scrapeWebsite(inputUrl: string): Promise<WebsiteData> {
 
     // Social Links
     const socialPatterns: Record<string, RegExp> = {
-      instagram: /instagram\.com\/([^/?#]+)/,
+      instagram: /instagram\.com\/([a-zA-Z0-9_.]+)\/?$/,
       facebook: /facebook\.com\/([^/?#]+)/,
       tiktok: /tiktok\.com\/@?([^/?#]+)/,
     }
+
+    // Generic Instagram paths that are NOT user handles
+    const igGenericPaths = new Set([
+      'p', 'explore', 'reel', 'reels', 'stories', 'accounts',
+      'about', 'legal', 'developer', 'api', 'direct', 'tv',
+      'share', 'sharer', 'intent', 'dialog',
+    ])
 
     $('a[href]').each((_, el) => {
       const href = $(el).attr('href') || ''
@@ -119,12 +126,27 @@ export async function scrapeWebsite(inputUrl: string): Promise<WebsiteData> {
         if (match && match[1] && !result.socialLinks[platform]) {
           const handle = match[1]
           // Skip generic pages
-          if (!['share', 'sharer', 'sharer.php', 'intent', 'dialog'].includes(handle)) {
+          if (platform === 'instagram') {
+            if (!igGenericPaths.has(handle.toLowerCase())) {
+              result.socialLinks[platform] = handle
+            }
+          } else if (!['share', 'sharer', 'sharer.php', 'intent', 'dialog'].includes(handle)) {
             result.socialLinks[platform] = handle
           }
         }
       }
     })
+
+    // Also detect Instagram handle from the URL itself (when user provides instagram.com/handle as website)
+    try {
+      const urlObj = new URL(result.finalUrl)
+      if (urlObj.hostname.includes('instagram.com')) {
+        const pathMatch = urlObj.pathname.match(/^\/([a-zA-Z0-9_.]+)\/?$/)
+        if (pathMatch && !igGenericPaths.has(pathMatch[1].toLowerCase()) && !result.socialLinks.instagram) {
+          result.socialLinks.instagram = pathMatch[1]
+        }
+      }
+    } catch { /* invalid URL, skip */ }
 
     // Theme Color — von Website Meta Tags (NICHT vom Logo!)
     const themeColor =

@@ -9,6 +9,7 @@ export type LogoCandidate = {
 export type CSSColorResult = {
   backgroundColor: string | null
   accentColor: string | null
+  headerBackground: string | null
   source: string | null
   confidence: number
   candidates: ColorCandidate[]

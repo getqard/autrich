@@ -1,42 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import sharp from 'sharp'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
-import { pickBrandColors } from '@/lib/enrichment/color-picker'
-import { extractPalette, extractLogoContentColor, colorDistance, isBoringColor, hexLuminance, darkenColor } from '@/lib/enrichment/colors'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
+import { determinePassColors } from '@/lib/enrichment/pass-colors'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import { INDUSTRIES } from '@/data/industries-seed'
-
-/**
- * Ensure a buffer is rasterized PNG. SVGs and other vector formats
- * can't be read by node-vibrant, so we convert them first.
- */
-async function ensureRasterBuffer(buf: Buffer): Promise<Buffer> {
-  const head = buf.subarray(0, 256).toString('utf8').trim()
-  const isSvg = head.startsWith('<svg') || head.startsWith('<?xml') || head.includes('<svg')
-
-  if (isSvg) {
-    return sharp(buf)
-      .resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
-      .png()
-      .toBuffer()
-  }
-
-  try {
-    const meta = await sharp(buf).metadata()
-    if (meta.format === 'svg') {
-      return sharp(buf)
-        .resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
-        .png()
-        .toBuffer()
-    }
-  } catch { /* not an image sharp knows, return as-is */ }
-
-  return buf
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -50,12 +20,11 @@ export async function POST(request: NextRequest) {
     const result = await scrapeWebsite(url)
 
     // ─── Enrichment Preview ─────────────────────────────────
-    // Try Brandfetch logo + node-vibrant palette + GMaps mapping
 
     type EnrichmentLogo = { base64: string; source: string } | null
     type EnrichmentColors = { dominant: string; accent: string | null; textColor: string; labelColor: string; swatches: Array<{ name: string; hex: string; population: number; saturation: number }> } | null
     type EnrichmentIndustry = { slug: string; method: string; gmapsCategory: string | null; emoji: string | null; defaultReward: string | null } | null
-    type EnrichmentPassPreview = { bg: string; text: string; label: string } | null
+    type EnrichmentPassPreview = { bg: string; text: string; label: string; method: string } | null
 
     let enrichmentPreview: {
       logo: EnrichmentLogo
@@ -77,7 +46,6 @@ export async function POST(request: NextRequest) {
       const bf = await fetchBrandfetchLogo(domain)
       if (bf) {
         if (bf.source === 'brandfetch-lettermark') {
-          // Lettermark = generic fallback, skip for now
           console.log('[Scrape] Brandfetch returned lettermark, skipping')
         } else {
           brandfetchBuffer = bf.buffer
@@ -86,14 +54,11 @@ export async function POST(request: NextRequest) {
       }
 
       // 2. Website logo — AI Picker or score-based fallback
-      // If website has a strong logo (score >= 90), prefer it over Brandfetch
       const hasStrongWebsiteLogo = result.bestLogo && result.bestLogo.score >= 90
 
-      // Try website logo if strong signal OR no Brandfetch real logo
       if ((hasStrongWebsiteLogo || !brandfetchBuffer) && result.logoCandidates?.length) {
         let pickedUrl: string | null = null
 
-        // Try AI Logo Picker if multiple candidates + business_name available
         if (result.logoCandidates.length >= 2 && business_name) {
           try {
             const aiPick = await pickBestLogo(result.logoCandidates, business_name)
@@ -107,7 +72,6 @@ export async function POST(request: NextRequest) {
           } catch { /* non-fatal */ }
         }
 
-        // Fallback: use bestLogo (highest score)
         if (!pickedUrl && result.bestLogo) {
           pickedUrl = result.bestLogo.url
         }
@@ -141,13 +105,13 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 2b. Brandfetch real logo as fallback (if website didn't yield a logo)
+      // 2b. Brandfetch real logo as fallback
       if (!logoBuffer && brandfetchBuffer) {
         logoBuffer = brandfetchBuffer
         logoSource = brandfetchSource!
       }
 
-      // 2c. Instagram Profilbild (when website + Brandfetch didn't yield a logo)
+      // 2c. Instagram Profilbild
       if (!logoBuffer && result.socialLinks?.instagram) {
         try {
           const igBuffer = await fetchInstagramAvatar(result.socialLinks.instagram)
@@ -173,115 +137,7 @@ export async function POST(request: NextRequest) {
         logoSource = 'generated'
       }
 
-      // ─── COLOR WATERFALL ──────────────────────────────────
-      // 1. AI Color Picker (Haiku Vision) — looks at logo + CSS candidates
-      // 2. CSS Brand Colors — only if colorful (not black/gray/white)
-      // 3. Logo Palette (node-vibrant) — smart swatch selection
-      // 4. Industry Default
-      // 5. Fallback #1a1a2e
-
-      let colors: EnrichmentColors = null
-      let passPreviewBg: string | null = null
-      let passPreviewAccent: string | null = null
-
-      // Ensure logo is rasterized (SVG → PNG) before color extraction
-      let rasterLogoBuffer: Buffer | null = null
-      if (logoBuffer) {
-        try {
-          rasterLogoBuffer = await ensureRasterBuffer(logoBuffer)
-        } catch {
-          rasterLogoBuffer = logoBuffer // fallback to original
-        }
-      }
-
-      // Extract vibrant palette from logo (needed for fallback even if AI succeeds)
-      if (rasterLogoBuffer) {
-        try {
-          const palette = await extractPalette(rasterLogoBuffer)
-          colors = palette
-        } catch { /* non-fatal */ }
-      }
-
-      // Step 1: AI Color Picker
-      if (rasterLogoBuffer) {
-        try {
-          const aiColors = await pickBrandColors(
-            rasterLogoBuffer,
-            { title: result.title, description: result.description, themeColor: result.themeColor },
-            result.brandColors?.candidates || [],
-          )
-          if (aiColors && aiColors.confidence >= 0.7) {
-            passPreviewBg = aiColors.background
-            passPreviewAccent = aiColors.accent
-          }
-        } catch { /* non-fatal */ }
-      }
-
-      // Step 2: Contrast-based CSS color selection (Logo ↔ CSS)
-      // Instead of filtering "boring" colors, pick the CSS color with
-      // MAXIMUM contrast to the logo content color.
-      const logoColor = rasterLogoBuffer
-        ? await extractLogoContentColor(rasterLogoBuffer).catch(() => null)
-        : null
-
-      if (!passPreviewBg && result.brandColors?.candidates?.length && logoColor) {
-        const ranked = result.brandColors.candidates
-          .map(c => ({ ...c, contrast: colorDistance(c.hex, logoColor.hex) }))
-          .sort((a, b) => b.contrast - a.contrast)
-
-        const best = ranked[0]
-        if (best && best.contrast > 80) {
-          const lum = hexLuminance(best.hex)
-          if (lum < 0.4) {
-            passPreviewBg = best.hex
-          } else {
-            passPreviewBg = darkenColor(best.hex, Math.min(0.5, (lum - 0.25) / lum))
-          }
-          const second = ranked.find(c => c.hex !== best.hex)
-          passPreviewAccent = second?.hex || logoColor.hex
-        }
-      }
-
-      // Step 2b: CSS Brand Colors fallback (old path — no logo color available)
-      if (!passPreviewBg && result.brandColors?.confidence >= 0.6 && result.brandColors.backgroundColor) {
-        if (!isBoringColor(result.brandColors.backgroundColor)) {
-          passPreviewBg = result.brandColors.backgroundColor
-          passPreviewAccent = result.brandColors.accentColor
-        }
-      }
-
-      // Step 3: Logo color as background (darken if needed)
-      if (!passPreviewBg && logoColor && logoColor.saturation >= 0.15) {
-        const lum = logoColor.luminance
-        if (lum > 0.4) {
-          passPreviewBg = darkenColor(logoColor.hex, Math.min(0.6, (lum - 0.25) / lum))
-        } else {
-          passPreviewBg = logoColor.hex
-        }
-      }
-
-      // Step 3b: Logo palette (node-vibrant) — saturation-ranked
-      if (!passPreviewBg && colors?.dominant) {
-        if (!isBoringColor(colors.dominant)) {
-          passPreviewBg = colors.dominant
-          passPreviewAccent = colors.accent
-        }
-      }
-
-      // Step 3c: Any saturated swatch from palette
-      if (!passPreviewBg && colors?.swatches?.length) {
-        const bestSaturated = colors.swatches
-          .filter(s => s.saturation >= 0.15)
-          .sort((a, b) => b.saturation - a.saturation)[0]
-        if (bestSaturated) {
-          const lum = hexLuminance(bestSaturated.hex)
-          passPreviewBg = lum > 0.4
-            ? darkenColor(bestSaturated.hex, Math.min(0.6, (lum - 0.25) / lum))
-            : bestSaturated.hex
-        }
-      }
-
-      // Industry mapping
+      // ─── Industry Mapping ─────────────────────────────────
       let industry: EnrichmentIndustry = null
       if (gmaps_category || gmaps_categories?.length) {
         const slug = mapGmapsCategory(gmaps_category || null, gmaps_categories || [])
@@ -297,31 +153,35 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Step 4: Industry default
-      if (!passPreviewBg && industry) {
-        const ind = INDUSTRIES.find(i => i.slug === industry!.slug)
-        if (ind?.default_color) {
-          passPreviewBg = ind.default_color
-        }
-      }
+      const industryDefaults = industry
+        ? INDUSTRIES.find(i => i.slug === industry!.slug) ?? null
+        : null
 
-      // Step 5: Fallback
-      const bgColor = passPreviewBg || '#1a1a2e'
-
-      // Pass preview colors
-      let passPreview: EnrichmentPassPreview = null
-      const lum = hexLuminance(bgColor)
-      passPreview = {
-        bg: bgColor,
-        text: lum > 0.5 ? '#000000' : '#ffffff',
-        label: passPreviewAccent || (lum > 0.5 ? '#333333' : '#bbbbbb'),
-      }
+      // ─── COLOR DETERMINATION (unified) ────────────────────
+      const passColors = await determinePassColors({
+        logoBuffer,
+        cssCandidates: result.brandColors?.candidates || [],
+        headerBackground: result.brandColors?.headerBackground ?? null,
+        websiteContext: {
+          title: result.title,
+          description: result.description,
+          themeColor: result.themeColor,
+        },
+        industrySlug: industry?.slug ?? null,
+        industryDefaults,
+        gmapsPhotoBuffer: null,
+      })
 
       enrichmentPreview = {
         logo: logoBuffer && logoSource ? { base64: logoBuffer.toString('base64'), source: logoSource } : null,
-        colors,
+        colors: passColors.palette,
         industry,
-        passPreview,
+        passPreview: {
+          bg: passColors.backgroundColor,
+          text: passColors.textColor,
+          label: passColors.labelColor,
+          method: passColors.method,
+        },
       }
     } catch (err) {
       console.error('Enrichment preview failed (non-fatal):', err)

@@ -17,6 +17,7 @@ export type ColorCandidate = {
 export type CSSColorResult = {
   backgroundColor: string | null
   accentColor: string | null
+  headerBackground: string | null
   source: string | null
   confidence: number
   candidates: ColorCandidate[]
@@ -380,6 +381,92 @@ function extractFromStyleRules(css: string): ColorCandidate[] {
   return candidates
 }
 
+// ─── Header Background Extraction ────────────────────────────
+
+/**
+ * Extract the background color of the header/nav element.
+ * This is where the logo sits — highest-confidence brand signal.
+ */
+function extractHeaderBackground(html: string, css: string): ColorCandidate | null {
+  // 1. CSS variables for header bg
+  const headerVarPatterns = [
+    /--header[-_]bg(?:[-_]color)?\s*:\s*([^;}\n]+)/i,
+    /--navbar[-_]bg(?:[-_]color)?\s*:\s*([^;}\n]+)/i,
+    /--nav[-_]bg(?:[-_]color)?\s*:\s*([^;}\n]+)/i,
+    /--header[-_]background(?:[-_]color)?\s*:\s*([^;}\n]+)/i,
+  ]
+
+  for (const pattern of headerVarPatterns) {
+    const match = css.match(pattern)
+    if (match) {
+      const hex = parseCSSColor(match[1])
+      if (hex && !isUselessColor(hex)) {
+        return { hex, role: 'background', source: 'header-var', confidence: 0.97 }
+      }
+    }
+  }
+
+  // 2. Inline style on <header> or <nav> tags
+  const inlineHeaderPatterns = [
+    /<header[^>]*style=["']([^"']*background[^"']*)["']/gi,
+    /<nav[^>]*style=["']([^"']*background[^"']*)["']/gi,
+  ]
+
+  for (const pattern of inlineHeaderPatterns) {
+    let match
+    while ((match = pattern.exec(html)) !== null) {
+      const style = match[1]
+      const bgMatch = style.match(/background-color\s*:\s*([^;]+)/i)
+        || style.match(/background\s*:\s*(#[0-9a-fA-F]{3,8}|rgb[a(]?[^;)]+\)?)/i)
+      if (bgMatch) {
+        const hex = parseCSSColor(bgMatch[1].trim().split(/\s/)[0])
+        if (hex && !isUselessColor(hex)) {
+          return { hex, role: 'background', source: 'inline:header', confidence: 0.97 }
+        }
+      }
+    }
+  }
+
+  // 3. CSS rules targeting header/nav elements
+  const headerSelectors = /(?:^|[,}\s])(header|nav|\.header|\.navbar|\.site-header|#header|#masthead|\.main-header|\.nav-wrapper|\.top-bar)\s*[^{]*\{([^}]*)\}/gim
+  let ruleMatch
+  while ((ruleMatch = headerSelectors.exec(css)) !== null) {
+    const body = ruleMatch[2]
+    const bgMatch = body.match(/background-color\s*:\s*([^;!}\n]+)/i)
+      || body.match(/background\s*:\s*(#[0-9a-fA-F]{3,8}|rgb[a(]?[^;)]+\)?)/i)
+    if (bgMatch) {
+      const raw = bgMatch[1].trim()
+      if (raw.startsWith('var(')) continue
+      const hex = parseCSSColor(raw.split(/\s/)[0])
+      if (hex && !isUselessColor(hex)) {
+        return { hex, role: 'background', source: `css-rule:${ruleMatch[1].trim()}`, confidence: 0.97 }
+      }
+    }
+  }
+
+  // 4. Elementor data-settings on header containers
+  const headerDataMatch = html.match(/<(?:header|nav)[^>]*data-settings=["']([\s\S]*?)["']/i)
+  if (headerDataMatch) {
+    try {
+      const raw = headerDataMatch[1]
+        .replace(/&quot;/g, '"')
+        .replace(/&#34;/g, '"')
+        .replace(/&amp;/g, '&')
+      if (raw.startsWith('{')) {
+        const settings = JSON.parse(raw)
+        if (settings.background_color) {
+          const hex = parseCSSColor(settings.background_color)
+          if (hex && !isUselessColor(hex)) {
+            return { hex, role: 'background', source: 'elementor:header-bg', confidence: 0.97 }
+          }
+        }
+      }
+    } catch { /* invalid JSON */ }
+  }
+
+  return null
+}
+
 // ─── Main Extraction ─────────────────────────────────────────
 
 export function extractBrandColors(html: string): CSSColorResult {
@@ -391,6 +478,9 @@ export function extractBrandColors(html: string): CSSColorResult {
     ...extractFromInlineStyles(html),
     ...extractFromStyleRules(css),
   ]
+
+  // Extract header background separately (highest confidence signal)
+  const headerBg = extractHeaderBackground(html, css)
 
   // Deduplicate by hex (keep highest confidence per hex)
   const byHex = new Map<string, ColorCandidate>()
@@ -429,6 +519,7 @@ export function extractBrandColors(html: string): CSSColorResult {
   return {
     backgroundColor: bestBg?.hex ?? null,
     accentColor: bestAccent?.hex ?? null,
+    headerBackground: headerBg?.hex ?? null,
     source: bestBg?.source ?? null,
     confidence: bestBg?.confidence ?? 0,
     candidates,
