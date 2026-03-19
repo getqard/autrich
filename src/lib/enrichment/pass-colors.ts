@@ -118,8 +118,6 @@ function ensureLabelContrast(label: string, bg: string): string {
 export async function determinePassColors(input: PassColorInput): Promise<PassColorOutput> {
   const {
     logoBuffer,
-    cssCandidates,
-    headerBackground,
     headerScreenshot,
     websiteContext,
     industrySlug,
@@ -128,6 +126,17 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   } = input
 
   const log = (msg: string) => console.log(`[PassColors] ${msg}`)
+
+  // ─── Sanitize inputs: filter out invalid/shorthand hex ────
+  const isValid6Hex = (s: string) => /^#[0-9a-fA-F]{6}$/.test(s)
+  const cssCandidates = input.cssCandidates.filter(c => isValid6Hex(c.hex))
+  const headerBackground = input.headerBackground && isValid6Hex(input.headerBackground)
+    ? input.headerBackground
+    : null
+
+  if (cssCandidates.length !== input.cssCandidates.length) {
+    log(`Filtered ${input.cssCandidates.length - cssCandidates.length} invalid hex candidates (shorthand/alpha)`)
+  }
 
   log(`Input: ${cssCandidates.length} CSS candidates, headerBG=${headerBackground}, logo=${logoBuffer ? `${logoBuffer.length}B` : 'null'}, industry=${industrySlug}`)
 

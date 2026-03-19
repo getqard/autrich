@@ -336,14 +336,43 @@ export async function pickBrandColors(
     if (!background || !isValidHex(background)) return null
     if (confidence < 0.5) return null
 
-    // ─── Post-Validation ───────────────────────────────────
-    const bgLum = hexLuminance(background)
-    const validAccent = accent && isValidHex(accent) ? accent.toLowerCase() : null
-    const validLabel = label && isValidHex(label) ? label.toLowerCase() : null
-    let bgRejected = false
+    // ─── Hallucination Check ─────────────────────────────────
+    // AI must pick colors that actually exist on the website.
+    // If a color has no CSS candidate within perceptual distance 80, it's hallucinated.
+    const isGrounded = (hex: string): boolean => {
+      if (cssCandidates.length === 0) return true // no candidates to check against
+      return cssCandidates.some(c => perceptualDistance(hex, c.hex) < 80)
+    }
+
+    let validBg = background
+    let validAccentHex = accent && isValidHex(accent) ? accent.toLowerCase() : null
+    let validLabelHex = label && isValidHex(label) ? label.toLowerCase() : null
+
+    if (!isGrounded(validBg)) {
+      console.log(`[AI Color Picker] BG ${validBg} hallucinated (no CSS match within dist 80)`)
+      validBg = ''
+    }
+    if (validAccentHex && !isGrounded(validAccentHex)) {
+      console.log(`[AI Color Picker] Accent ${validAccentHex} hallucinated → dropped`)
+      validAccentHex = null
+    }
+    if (validLabelHex && !isGrounded(validLabelHex)) {
+      console.log(`[AI Color Picker] Label ${validLabelHex} hallucinated → dropped`)
+      validLabelHex = null
+    }
+
+    // If all colors were hallucinated, reject entirely
+    if (!validBg && !validAccentHex && !validLabelHex) {
+      console.log(`[AI Color Picker] All colors hallucinated → returning null`)
+      return null
+    }
+
+    // ─── Post-Validation (luminance, logo contrast) ──────────
+    const bgLum = validBg ? hexLuminance(validBg) : 0
+    let bgRejected = !validBg
 
     // Reject too dark (near-black)
-    if (bgLum < 0.05) {
+    if (!bgRejected && bgLum < 0.05) {
       console.log(`[AI Color Picker] BG rejected: too dark (lum=${bgLum.toFixed(3)})`)
       bgRejected = true
     }
@@ -354,7 +383,7 @@ export async function pickBrandColors(
     }
     // Reject if BG ≈ logo color (logo would be invisible)
     if (!bgRejected && context.logoContentColor) {
-      const dist = perceptualDistance(background, context.logoContentColor)
+      const dist = perceptualDistance(validBg, context.logoContentColor)
       if (dist < 100) {
         console.log(`[AI Color Picker] BG rejected: too close to logo color (dist=${dist.toFixed(1)})`)
         bgRejected = true
@@ -363,19 +392,19 @@ export async function pickBrandColors(
 
     if (bgRejected) {
       // BG is bad, but keep accent/label if they're good
-      if (validAccent || validLabel) {
-        console.log(`[AI Color Picker] BG rejected but keeping accent=${validAccent}, label=${validLabel}`)
-        return { background: '', accent: validAccent, label: validLabel, confidence: 0 }
+      if (validAccentHex || validLabelHex) {
+        console.log(`[AI Color Picker] BG rejected but keeping accent=${validAccentHex}, label=${validLabelHex}`)
+        return { background: '', accent: validAccentHex, label: validLabelHex, confidence: 0 }
       }
       return null
     }
 
-    console.log(`[AI Color Picker] background=${background}, label=${label}, accent=${accent}, confidence=${confidence}`)
+    console.log(`[AI Color Picker] background=${validBg}, label=${validLabelHex}, accent=${validAccentHex}, confidence=${confidence}`)
 
     return {
-      background: background.toLowerCase(),
-      accent: validAccent,
-      label: validLabel,
+      background: validBg.toLowerCase(),
+      accent: validAccentHex,
+      label: validLabelHex,
       confidence,
     }
   } catch (err) {
