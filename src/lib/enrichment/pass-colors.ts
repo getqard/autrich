@@ -336,7 +336,7 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     }
   }
 
-  // Also check CSS accent candidates directly
+  // Also check CSS accent candidates directly (lighten if needed for WCAG)
   if (!labelColor) {
     const accentCandidates = cssCandidates.filter(c =>
       c.role === 'accent' && c.hex !== bg
@@ -346,23 +346,46 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         labelColor = c.hex
         break
       }
+      // Try lightening the accent to meet WCAG
+      const lightened = ensureLabelContrast(c.hex, bg)
+      if (wcagContrastRatio(lightened, bg) >= 3.0) {
+        labelColor = lightened
+        break
+      }
     }
   }
 
   // Strategy B: Logo color as label (if ≠ BG + WCAG ≥ 3:1)
-  if (!labelColor && logoColor) {
+  // Skip if logo color is desaturated (gray) — not a brand signal
+  if (!labelColor && logoColor && logoColor.saturation >= 0.08) {
     const dist = perceptualDistance(logoColor.hex, bg)
     if (dist > 80 && wcagContrastRatio(logoColor.hex, bg) >= 3.0) {
       labelColor = logoColor.hex
     }
   }
 
-  // Strategy C: HSL derivation from background
+  // Strategy C: HSL derivation from background (or any saturated source)
   if (!labelColor) {
     const bgHsl = hexToHsl(bg)
-    // Same hue, keep saturation, increase lightness
+    // If BG is neutral/desaturated, try to borrow hue from a CSS candidate
+    let sourceHsl = bgHsl
+    if (bgHsl.s < 0.1) {
+      // Look for any saturated CSS candidate to borrow hue from
+      const saturatedCandidate = cssCandidates
+        .filter(c => colorSaturation(c.hex) > 0.2)
+        .sort((a, b) => b.confidence - a.confidence)[0]
+      if (saturatedCandidate) {
+        sourceHsl = hexToHsl(saturatedCandidate.hex)
+      } else if (websiteContext.themeColor) {
+        // Try theme-color meta tag
+        const themeSat = colorSaturation(websiteContext.themeColor)
+        if (themeSat > 0.15) {
+          sourceHsl = hexToHsl(websiteContext.themeColor)
+        }
+      }
+    }
     const targetL = bgHsl.l < 0.5 ? 0.6 : 0.35
-    const derived = hslToHex(bgHsl.h, Math.max(bgHsl.s, 0.15), targetL)
+    const derived = hslToHex(sourceHsl.h, Math.max(sourceHsl.s, 0.15), targetL)
     if (wcagContrastRatio(derived, bg) >= 3.0) {
       labelColor = derived
     }
