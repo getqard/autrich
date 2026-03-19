@@ -158,6 +158,10 @@ export async function POST(request: NextRequest) {
         : null
 
       // ─── COLOR DETERMINATION (unified) ────────────────────
+      console.log(`[Scrape Route] brandColors exists=${!!result.brandColors}, candidates=${result.brandColors?.candidates?.length ?? 'undefined'}, headerBG=${result.brandColors?.headerBackground ?? 'undefined'}`)
+      if (result.brandColors?.candidates?.length) {
+        console.log(`[Scrape Route] Candidates:`, result.brandColors.candidates.map(c => `${c.hex} (${c.role}, ${c.source}, conf=${c.confidence.toFixed(2)})`).join(', '))
+      }
       const passColors = await determinePassColors({
         logoBuffer,
         cssCandidates: result.brandColors?.candidates || [],

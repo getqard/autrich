@@ -218,30 +218,42 @@ export default function ScraperPage() {
                   </div>
                 </div>
 
-                {/* Colors */}
+                {/* Pass Colors (actual pass colors, not palette) */}
                 <div>
-                  <p className="text-[10px] text-zinc-600 mb-2 uppercase tracking-wide">Farben</p>
-                  {ep.colors ? (
+                  <p className="text-[10px] text-zinc-600 mb-2 uppercase tracking-wide">Pass-Farben</p>
+                  {ep.passPreview ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg border border-zinc-600" style={{ backgroundColor: ep.passPreview.bg }} />
+                        <div>
+                          <p className="text-xs font-mono text-zinc-200">{ep.passPreview.bg}</p>
+                          <p className="text-[10px] text-zinc-500">Background</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg border border-zinc-600" style={{ backgroundColor: ep.passPreview.label }} />
+                        <div>
+                          <p className="text-xs font-mono text-zinc-200">{ep.passPreview.label}</p>
+                          <p className="text-[10px] text-zinc-500">Label</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg border border-zinc-600" style={{ backgroundColor: ep.passPreview.text }} />
+                        <div>
+                          <p className="text-xs font-mono text-zinc-200">{ep.passPreview.text}</p>
+                          <p className="text-[10px] text-zinc-500">Text</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : ep.colors ? (
                     <div className="space-y-2">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-lg border border-zinc-600" style={{ backgroundColor: ep.colors.dominant }} />
                         <div>
                           <p className="text-xs font-mono text-zinc-200">{ep.colors.dominant}</p>
-                          <p className="text-[10px] text-zinc-500">Background</p>
+                          <p className="text-[10px] text-zinc-500">Palette Dominant</p>
                         </div>
                       </div>
-                      {ep.colors.accent && (
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg border border-zinc-600" style={{ backgroundColor: ep.colors.accent }} />
-                          <div>
-                            <p className="text-xs font-mono text-zinc-200">{ep.colors.accent}</p>
-                            <p className="text-[10px] text-zinc-500">Accent</p>
-                          </div>
-                        </div>
-                      )}
-                      <p className="text-[10px] text-zinc-600">
-                        Text: <span className="font-mono">{ep.colors.textColor}</span> &middot; Label: <span className="font-mono">{ep.colors.labelColor}</span>
-                      </p>
                     </div>
                   ) : (
                     <p className="text-xs text-zinc-600">Keine Farben extrahiert</p>
