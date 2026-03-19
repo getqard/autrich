@@ -382,20 +382,20 @@ export async function pickBrandColors(
       bgRejected = true
     }
     // Reject if BG ≈ logo color (logo would be invisible)
+    // Relax threshold when composite was used — AI sees the full website context
+    // and knows the logo works on this background
+    const logoDistThreshold = compositeImage ? 40 : 100
     if (!bgRejected && context.logoContentColor) {
       const dist = perceptualDistance(validBg, context.logoContentColor)
-      if (dist < 100) {
-        console.log(`[AI Color Picker] BG rejected: too close to logo color (dist=${dist.toFixed(1)})`)
+      if (dist < logoDistThreshold) {
+        console.log(`[AI Color Picker] BG rejected: too close to logo color (dist=${dist.toFixed(1)} < ${logoDistThreshold})`)
         bgRejected = true
       }
     }
 
     if (bgRejected) {
-      // BG is bad, but keep accent/label if they're good
-      if (validAccentHex || validLabelHex) {
-        console.log(`[AI Color Picker] BG rejected but keeping accent=${validAccentHex}, label=${validLabelHex}`)
-        return { background: '', accent: validAccentHex, label: validLabelHex, confidence: 0 }
-      }
+      // BG rejected → discard label/accent too (they were chosen for this BG)
+      console.log(`[AI Color Picker] BG rejected → discarding label/accent (chosen for wrong BG)`)
       return null
     }
 
