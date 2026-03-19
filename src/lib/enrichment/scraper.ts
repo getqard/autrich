@@ -160,7 +160,7 @@ export async function scrapeWebsite(inputUrl: string): Promise<WebsiteData> {
     }
 
     // Brand Colors from CSS (much more reliable than logo-based extraction)
-    result.brandColors = extractBrandColors(html)
+    result.brandColors = await extractBrandColors(html, baseUrl)
 
     // Loyalty / App Detection
     const pageText = $('body').text().toLowerCase()

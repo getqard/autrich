@@ -160,6 +160,83 @@ function extractStyleBlocks(html: string): string {
   return blocks.join('\n')
 }
 
+/**
+ * Extract external stylesheet URLs from <link rel="stylesheet"> tags.
+ * Prioritizes theme/brand stylesheets over framework CSS.
+ */
+function extractStylesheetUrls(html: string, baseUrl: string): string[] {
+  const urls: string[] = []
+  const linkRegex = /<link[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi
+  const linkRegex2 = /<link[^>]*href=["']([^"']+)["'][^>]*rel=["']stylesheet["'][^>]*>/gi
+
+  for (const regex of [linkRegex, linkRegex2]) {
+    let match
+    while ((match = regex.exec(html)) !== null) {
+      try {
+        const url = new URL(match[1], baseUrl).href
+        if (!urls.includes(url)) urls.push(url)
+      } catch { /* invalid URL */ }
+    }
+  }
+
+  // Sort: prioritize likely brand/theme CSS over generic framework CSS
+  const priorityKeywords = ['style', 'theme', 'custom', 'elementor', 'astra', 'divi', 'main', 'global', 'brand']
+  const deprioritize = ['wp-includes', 'jquery', 'font', 'dashicons', 'admin', 'gutenberg', 'block-library', 'woocommerce']
+
+  return urls.sort((a, b) => {
+    const aLower = a.toLowerCase()
+    const bLower = b.toLowerCase()
+    const aSkip = deprioritize.some(kw => aLower.includes(kw))
+    const bSkip = deprioritize.some(kw => bLower.includes(kw))
+    if (aSkip && !bSkip) return 1
+    if (!aSkip && bSkip) return -1
+    const aPrio = priorityKeywords.some(kw => aLower.includes(kw))
+    const bPrio = priorityKeywords.some(kw => bLower.includes(kw))
+    if (aPrio && !bPrio) return -1
+    if (!aPrio && bPrio) return 1
+    return 0
+  })
+}
+
+/**
+ * Fetch external CSS files and return combined CSS text.
+ * Fetches top N stylesheets with short timeouts.
+ */
+async function fetchExternalCSS(urls: string[], maxFiles: number = 5, maxSizePerFile: number = 200_000): Promise<string> {
+  const blocks: string[] = []
+
+  const toFetch = urls.slice(0, maxFiles)
+  const results = await Promise.allSettled(
+    toFetch.map(async (url) => {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 3000)
+      try {
+        const res = await fetch(url, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+        })
+        clearTimeout(timeout)
+        if (!res.ok) return ''
+        const contentType = res.headers.get('content-type') || ''
+        if (contentType.includes('html')) return '' // not CSS
+        const text = await res.text()
+        return text.substring(0, maxSizePerFile)
+      } catch {
+        clearTimeout(timeout)
+        return ''
+      }
+    })
+  )
+
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value) {
+      blocks.push(r.value)
+    }
+  }
+
+  return blocks.join('\n')
+}
+
 // Known WordPress default palette colors (should not be treated as brand colors)
 const WP_DEFAULT_COLORS = new Set([
   '#000000', '#ffffff', '#abb8c3', '#f78da7', '#cf2e2e',
@@ -469,8 +546,25 @@ function extractHeaderBackground(html: string, css: string): ColorCandidate | nu
 
 // ─── Main Extraction ─────────────────────────────────────────
 
-export function extractBrandColors(html: string): CSSColorResult {
-  const css = extractStyleBlocks(html)
+export async function extractBrandColors(html: string, baseUrl?: string): Promise<CSSColorResult> {
+  const inlineCSS = extractStyleBlocks(html)
+
+  // Fetch external stylesheets for much better color detection
+  let externalCSS = ''
+  if (baseUrl) {
+    try {
+      const sheetUrls = extractStylesheetUrls(html, baseUrl)
+      if (sheetUrls.length > 0) {
+        console.log(`[CSS Colors] Fetching ${Math.min(sheetUrls.length, 5)} of ${sheetUrls.length} external stylesheets`)
+        externalCSS = await fetchExternalCSS(sheetUrls)
+        console.log(`[CSS Colors] External CSS: ${(externalCSS.length / 1024).toFixed(0)}KB`)
+      }
+    } catch {
+      // External CSS fetch failed, continue with inline only
+    }
+  }
+
+  const css = inlineCSS + '\n' + externalCSS
 
   const allCandidates: ColorCandidate[] = [
     ...extractFromCSSVars(css),
