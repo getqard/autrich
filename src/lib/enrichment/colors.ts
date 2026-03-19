@@ -6,16 +6,57 @@ export type PaletteResult = {
   accent: string | null
   textColor: string
   labelColor: string
-  swatches: Array<{ name: string; hex: string; population: number }>
+  swatches: Array<{ name: string; hex: string; population: number; saturation: number }>
 }
 
 /**
- * Extract a full color palette from an image buffer using node-vibrant.
- * Mapping: DarkVibrant → dominant (pass bg), Vibrant → accent, Muted → label base.
- * Falls back through available swatches if preferred ones are null.
+ * Trim a logo to its content area, removing whitespace/transparency.
+ * This is critical for color extraction — a gold text on 512x512 white canvas
+ * is 90% white pixels. After trim, it's 100% gold.
+ */
+async function trimLogoForColorExtraction(imageBuffer: Buffer): Promise<Buffer> {
+  const { default: sharpMod } = await import('sharp')
+  try {
+    // First flatten transparency to white, then trim white border
+    const trimmed = await sharpMod(imageBuffer)
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .trim({ threshold: 20 })
+      .toBuffer()
+    // Only use trimmed if it's at least 4x4 (trim can produce tiny results)
+    const meta = await sharpMod(trimmed).metadata()
+    if (meta.width && meta.height && meta.width >= 4 && meta.height >= 4) {
+      return trimmed
+    }
+  } catch { /* trim failed, use original */ }
+  return imageBuffer
+}
+
+/**
+ * Calculate HSV saturation for a hex color (0-1).
+ */
+export function colorSaturation(hex: string): number {
+  const { r, g, b } = hexToRgb(hex)
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  if (max === 0) return 0
+  return (max - min) / max
+}
+
+/**
+ * Extract a full color palette from a logo image buffer.
+ *
+ * Key insight: Logos are different from photos. The DESIGNED color matters,
+ * not the background filler. So we:
+ * 1. Trim whitespace/transparency to isolate the logo content
+ * 2. Rank swatches by saturation (not population) — the brand color
+ *    is the most colorful part, even if it's fewer pixels
+ * 3. Darken the most-saturated swatch for pass background suitability
  */
 export async function extractPalette(imageBuffer: Buffer): Promise<PaletteResult> {
-  const palette = await Vibrant.from(imageBuffer).getPalette()
+  // Trim logo to content area before extraction
+  const trimmedBuffer = await trimLogoForColorExtraction(imageBuffer)
+
+  const palette = await Vibrant.from(trimmedBuffer).getPalette()
 
   const swatches: PaletteResult['swatches'] = []
   const swatchNames = ['Vibrant', 'Muted', 'DarkVibrant', 'DarkMuted', 'LightVibrant', 'LightMuted'] as const
@@ -23,18 +64,17 @@ export async function extractPalette(imageBuffer: Buffer): Promise<PaletteResult
   for (const name of swatchNames) {
     const s = palette[name]
     if (s) {
-      swatches.push({ name, hex: s.hex, population: s.population })
+      const sat = colorSaturation(s.hex)
+      swatches.push({ name, hex: s.hex, population: s.population, saturation: sat })
     }
   }
 
-  // Dominant (for pass background — we want dark but NOT near-black):
-  // 1. DarkVibrant — if present AND not near-black (often too dark)
-  // 2. Muted — often the best brand color, calm but recognizable
-  // 3. DarkMuted — darker alternative
-  // 4. Vibrant — darken by 20% for pass suitability
-  // 5. first available / fallback
+  // ─── DOMINANT COLOR (for pass background) ────────────────
+  // Strategy: Find the most saturated non-boring swatch, then ensure it's
+  // dark enough for a pass background (target luminance 0.15-0.35).
   let dominant: string | null = null
 
+  // A) Traditional chain — works great when logo has solid dark brand colors
   if (palette.DarkVibrant && !isBoringColor(palette.DarkVibrant.hex)) {
     dominant = palette.DarkVibrant.hex
   }
@@ -44,21 +84,53 @@ export async function extractPalette(imageBuffer: Buffer): Promise<PaletteResult
   if (!dominant && palette.DarkMuted && !isBoringColor(palette.DarkMuted.hex)) {
     dominant = palette.DarkMuted.hex
   }
+
+  // B) Saturation-based fallback — when traditional chain fails (all boring),
+  //    pick the most SATURATED swatch. This is the key fix for logos like
+  //    gold text on white background: gold has high saturation, white has 0.
+  if (!dominant) {
+    const saturatedSwatches = swatches
+      .filter(s => s.saturation >= 0.15)
+      .sort((a, b) => b.saturation - a.saturation)
+
+    if (saturatedSwatches.length > 0) {
+      const best = saturatedSwatches[0]
+      // Ensure it's dark enough for a pass background
+      const lum = hexLuminance(best.hex)
+      if (lum > 0.4) {
+        // Too bright — darken to target luminance ~0.25
+        const darkenAmount = Math.min(0.6, (lum - 0.25) / lum)
+        dominant = darkenColor(best.hex, darkenAmount)
+      } else {
+        dominant = best.hex
+      }
+    }
+  }
+
+  // C) Last resort — any non-white swatch, darkened
   if (!dominant && palette.Vibrant) {
-    // Darken vibrant by 20% to make it pass-suitable
-    dominant = darkenColor(palette.Vibrant.hex, 0.2)
+    dominant = darkenColor(palette.Vibrant.hex, 0.3)
   }
   if (!dominant) {
     dominant = swatches[0]?.hex ?? '#1a1a2e'
   }
 
-  // Accent: Vibrant (loudest color) → LightVibrant → null
-  const accent = palette.Vibrant?.hex ?? palette.LightVibrant?.hex ?? null
+  // ─── ACCENT COLOR ────────────────────────────────────────
+  // The most saturated swatch that's different from dominant
+  const accentCandidates = swatches
+    .filter(s => s.hex !== dominant && s.saturation >= 0.1)
+    .sort((a, b) => b.saturation - a.saturation)
+  const accent = accentCandidates[0]?.hex
+    ?? palette.Vibrant?.hex
+    ?? palette.LightVibrant?.hex
+    ?? null
 
   // Text & label colors via WCAG
   const luminance = hexLuminance(dominant)
   const textColor = luminance > 0.5 ? '#000000' : '#ffffff'
-  const labelColor = palette.Muted?.hex ?? mixColors(dominant, textColor, 0.3)
+  const labelColor = accent
+    ? mixColors(dominant, accent, 0.3)
+    : (palette.Muted?.hex ?? mixColors(dominant, textColor, 0.3))
 
   return { dominant, accent, textColor, labelColor, swatches }
 }

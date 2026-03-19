@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { processLogo, validateLogoCandidate, fetchGoogleFavicon, generateInitialsLogo } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
-import { extractPalette, derivePassColors, adjustBgForContrast, isBoringColor } from '@/lib/enrichment/colors'
+import { extractPalette, derivePassColors, adjustBgForContrast, isBoringColor, hexLuminance, darkenColor } from '@/lib/enrichment/colors'
 import { pickBrandColors } from '@/lib/enrichment/color-picker'
 import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGmapsPhoto, cropToSquare } from '@/lib/enrichment/gmaps-photo'
@@ -320,16 +320,30 @@ export async function POST(
       }
     }
 
-    // 4c. node-vibrant from logo (only if colorful)
+    // 4c. node-vibrant from logo (extractPalette now trims + saturation-ranks)
+    let logoPalette: Awaited<ReturnType<typeof extractPalette>> | null = null
     if (!bgHex && logoBuffer) {
       try {
-        const palette = await extractPalette(logoBuffer)
-        if (!isBoringColor(palette.dominant)) {
-          bgHex = palette.dominant
-          accentHex = palette.accent
+        logoPalette = await extractPalette(logoBuffer)
+        if (!isBoringColor(logoPalette.dominant)) {
+          bgHex = logoPalette.dominant
+          accentHex = logoPalette.accent
         }
       } catch (err) {
         console.error('Vibrant extraction failed (non-fatal):', err)
+      }
+    }
+
+    // 4c2. Any saturated swatch (when dominant was still boring)
+    if (!bgHex && logoPalette?.swatches?.length) {
+      const bestSaturated = logoPalette.swatches
+        .filter(s => s.saturation >= 0.15)
+        .sort((a, b) => b.saturation - a.saturation)[0]
+      if (bestSaturated) {
+        const lum = hexLuminance(bestSaturated.hex)
+        bgHex = lum > 0.4
+          ? darkenColor(bestSaturated.hex, Math.min(0.6, (lum - 0.25) / lum))
+          : bestSaturated.hex
       }
     }
 

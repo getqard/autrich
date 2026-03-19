@@ -5,7 +5,7 @@ import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
 import { pickBrandColors } from '@/lib/enrichment/color-picker'
-import { extractPalette, isBoringColor, hexLuminance } from '@/lib/enrichment/colors'
+import { extractPalette, isBoringColor, hexLuminance, darkenColor } from '@/lib/enrichment/colors'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import { INDUSTRIES } from '@/data/industries-seed'
 
@@ -14,18 +14,26 @@ import { INDUSTRIES } from '@/data/industries-seed'
  * can't be read by node-vibrant, so we convert them first.
  */
 async function ensureRasterBuffer(buf: Buffer): Promise<Buffer> {
-  // Check if it's SVG (text-based)
   const head = buf.subarray(0, 256).toString('utf8').trim()
-  if (head.startsWith('<svg') || head.startsWith('<?xml') || head.includes('<svg')) {
-    return sharp(buf).resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } }).png().toBuffer()
+  const isSvg = head.startsWith('<svg') || head.startsWith('<?xml') || head.includes('<svg')
+
+  if (isSvg) {
+    return sharp(buf)
+      .resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
+      .png()
+      .toBuffer()
   }
-  // For other formats, just ensure it's decodable by sharp → PNG
+
   try {
     const meta = await sharp(buf).metadata()
     if (meta.format === 'svg') {
-      return sharp(buf).resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } }).png().toBuffer()
+      return sharp(buf)
+        .resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
+        .png()
+        .toBuffer()
     }
   } catch { /* not an image sharp knows, return as-is */ }
+
   return buf
 }
 
@@ -205,11 +213,25 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Step 3: Logo palette (node-vibrant)
+      // Step 3: Logo palette (node-vibrant) — extractPalette now trims the logo
+      // and uses saturation-ranking, so colors.dominant should be a real brand color
       if (!passPreviewBg && colors?.dominant) {
         if (!isBoringColor(colors.dominant)) {
           passPreviewBg = colors.dominant
           passPreviewAccent = colors.accent
+        }
+      }
+
+      // Step 3b: Any saturated swatch from palette (when dominant was still boring)
+      if (!passPreviewBg && colors?.swatches?.length) {
+        const bestSaturated = colors.swatches
+          .filter(s => s.saturation >= 0.15)
+          .sort((a, b) => b.saturation - a.saturation)[0]
+        if (bestSaturated) {
+          const lum = hexLuminance(bestSaturated.hex)
+          passPreviewBg = lum > 0.4
+            ? darkenColor(bestSaturated.hex, Math.min(0.6, (lum - 0.25) / lum))
+            : bestSaturated.hex
         }
       }
 
