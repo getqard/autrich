@@ -213,6 +213,22 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     log(`STEP 2 ✗ Header BG: ${headerBackground ? 'skipped (already have bg)' : 'not found'}`)
   }
 
+  // ─── STEP 2b: High-confidence CSS brand variable ──────────
+  // Elementor-primary, Astra-primary etc. with conf >= 0.9 are set by
+  // the brand designer — strongest algorithmic signal after header BG.
+  if (!bg) {
+    const brandVar = cssCandidates
+      .filter(c => c.confidence >= 0.9 && c.role === 'background' && hexLuminance(c.hex) <= 0.5)
+      .sort((a, b) => b.confidence - a.confidence)[0]
+    if (brandVar) {
+      bg = ensurePassSuitable(brandVar.hex)
+      method = 'css-brand-var'
+      log(`STEP 2b ✓ CSS Brand Variable: ${brandVar.hex} (${brandVar.source}, conf=${brandVar.confidence.toFixed(2)}) → ${bg}`)
+    } else {
+      log(`STEP 2b ✗ No high-confidence dark CSS brand variable`)
+    }
+  }
+
   // ─── STEP 3: Brand Palette Contrast Selection ─────────────
   if (!bg && cssCandidates.length > 0 && logoColor) {
     const bgCandidates: Array<ColorCandidate & { dist: number }> = []
@@ -227,11 +243,16 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     log(`STEP 3: ${bgCandidates.length} BG candidates (dist>130), ${labelCandidates.length} label candidates (dist<100)`)
 
     if (bgCandidates.length > 0) {
-      bgCandidates.sort((a, b) => hexLuminance(a.hex) - hexLuminance(b.hex))
+      // Sort by confidence first, then darkest as tiebreaker
+      bgCandidates.sort((a, b) => {
+        const confDiff = b.confidence - a.confidence
+        if (Math.abs(confDiff) > 0.1) return confDiff
+        return hexLuminance(a.hex) - hexLuminance(b.hex)
+      })
       bg = ensurePassSuitable(bgCandidates[0].hex)
       accent = labelCandidates[0]?.hex ?? null
       method = 'css-contrast'
-      log(`STEP 3 ✓ CSS Contrast: ${bgCandidates[0].hex} → ${bg}, accent=${accent}`)
+      log(`STEP 3 ✓ CSS Contrast: ${bgCandidates[0].hex} (conf=${bgCandidates[0].confidence.toFixed(2)}) → ${bg}, accent=${accent}`)
     } else {
       log(`STEP 3 ✗ No CSS candidates with enough distance to logo`)
     }
@@ -241,18 +262,14 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
 
   // ─── STEP 4: CSS Direct (no logo color available) ─────────
   if (!bg && cssCandidates.length > 0) {
-    const eligible = cssCandidates.filter(c => c.role === 'background' && c.confidence >= 0.6 && hexLuminance(c.hex) <= 0.9)
+    const eligible = cssCandidates.filter(c => c.role === 'background' && c.confidence >= 0.5 && hexLuminance(c.hex) <= 0.9)
     const bestCSS = eligible.sort((a, b) => b.confidence - a.confidence)[0]
     if (bestCSS) {
       bg = ensurePassSuitable(bestCSS.hex)
       method = 'css-direct'
       log(`STEP 4 ✓ CSS Direct: ${bestCSS.hex} (conf=${bestCSS.confidence.toFixed(2)}) → ${bg}`)
     } else {
-      log(`STEP 4 ✗ CSS Direct: ${eligible.length} eligible of ${cssCandidates.filter(c => c.role === 'background').length} bg candidates (need conf≥0.6 + lum≤0.9)`)
-      // Debug: show why candidates were rejected
-      for (const c of cssCandidates.filter(c => c.role === 'background').slice(0, 5)) {
-        log(`  → ${c.hex} conf=${c.confidence.toFixed(2)} lum=${hexLuminance(c.hex).toFixed(2)} src=${c.source}`)
-      }
+      log(`STEP 4 ✗ CSS Direct: no eligible bg candidates (need conf≥0.5 + lum≤0.9)`)
     }
   } else if (!bg) {
     log(`STEP 4 ✗ CSS Direct: no candidates`)
@@ -356,20 +373,30 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     }
   }
 
-  // Also check CSS accent candidates directly (lighten if needed for WCAG)
+  // Also check ALL CSS candidates for saturated brand colors (not just accent-role)
+  // Prefer: saturated colors (red, orange, blue) over grays
   if (!labelColor) {
-    const accentCandidates = cssCandidates.filter(c =>
-      c.role === 'accent' && c.hex !== bg
-    )
-    for (const c of accentCandidates) {
+    const labelCandidates = cssCandidates
+      .filter(c => c.hex !== bg && perceptualDistance(c.hex, bg!) > 60)
+      .map(c => ({ ...c, sat: colorSaturation(c.hex) }))
+      .sort((a, b) => {
+        // Highly saturated first, then by confidence
+        if (a.sat >= 0.3 && b.sat < 0.3) return -1
+        if (b.sat >= 0.3 && a.sat < 0.3) return 1
+        return b.confidence - a.confidence
+      })
+
+    for (const c of labelCandidates) {
       if (wcagContrastRatio(c.hex, bg) >= 3.0) {
         labelColor = c.hex
+        log(`Label: CSS candidate ${c.hex} (sat=${c.sat.toFixed(2)}, ${c.source})`)
         break
       }
-      // Try lightening the accent to meet WCAG
-      const lightened = ensureLabelContrast(c.hex, bg)
-      if (wcagContrastRatio(lightened, bg) >= 3.0) {
-        labelColor = lightened
+      // Try adjusting for WCAG
+      const adjusted = ensureLabelContrast(c.hex, bg)
+      if (wcagContrastRatio(adjusted, bg) >= 3.0 && colorSaturation(adjusted) >= 0.15) {
+        labelColor = adjusted
+        log(`Label: adjusted CSS candidate ${c.hex} → ${adjusted}`)
         break
       }
     }
