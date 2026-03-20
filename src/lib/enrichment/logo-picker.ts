@@ -84,16 +84,24 @@ export async function pickBestLogo(
   try {
     const client = new Anthropic()
 
-    const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 50,
-      messages: [
-        {
-          role: 'user',
-          content: contentBlocks,
-        },
-      ],
-    })
+    // 10s timeout to prevent hanging API calls
+    const apiAbort = new AbortController()
+    const apiTimeout = setTimeout(() => apiAbort.abort(), 10000)
+
+    const response = await client.messages.create(
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 50,
+        messages: [
+          {
+            role: 'user',
+            content: contentBlocks,
+          },
+        ],
+      },
+      { signal: apiAbort.signal }
+    )
+    clearTimeout(apiTimeout)
 
     // Parse response
     const text = response.content
@@ -104,7 +112,13 @@ export async function pickBestLogo(
     const jsonMatch = text.match(/\{[^}]+\}/)
     if (!jsonMatch) return null
 
-    const parsed = JSON.parse(jsonMatch[0])
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(jsonMatch[0])
+    } catch {
+      console.error('[AI Logo Picker] Failed to parse JSON:', jsonMatch[0])
+      return null
+    }
     const pick = typeof parsed.pick === 'number' ? parsed.pick : 0
     const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0
 
@@ -132,6 +146,8 @@ async function fetchImageBuffer(url: string): Promise<Buffer | null> {
     if (url.startsWith('data:')) {
       const commaIdx = url.indexOf(',')
       if (commaIdx === -1) return null
+      // Fix 9: Skip data: URIs > 2MB
+      if (url.length > 2 * 1024 * 1024) return null
       const header = url.substring(0, commaIdx).toLowerCase()
       const data = url.substring(commaIdx + 1)
       return header.includes('base64')

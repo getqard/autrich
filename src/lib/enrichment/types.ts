@@ -30,6 +30,8 @@ export type PassColorResult = {
   logoContrast: 'good' | 'low' | 'unknown'
 }
 
+export type WebsiteType = 'website' | 'instagram-only' | 'redirect-to-instagram' | 'no-website'
+
 export type WebsiteData = {
   url: string
   finalUrl: string
@@ -44,6 +46,7 @@ export type WebsiteData = {
   themeColor: string | null
   brandColors: CSSColorResult
   scrapeDurationMs: number
+  websiteType: WebsiteType
   error?: string
 }
 

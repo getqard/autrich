@@ -1,6 +1,29 @@
 import * as cheerio from 'cheerio'
-import type { WebsiteData, LogoCandidate } from './types'
+import type { WebsiteData, LogoCandidate, WebsiteType } from './types'
 import { extractBrandColors } from './css-colors'
+
+/**
+ * Detect if a URL is an Instagram profile link.
+ * Returns the handle if detected, null otherwise.
+ */
+function detectInstagramUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    if (!parsed.hostname.includes('instagram.com') && !parsed.hostname.includes('instagr.am')) return null
+    const pathMatch = parsed.pathname.match(/^\/([a-zA-Z0-9_.]+)\/?$/)
+    if (!pathMatch) return null
+    const handle = pathMatch[1].toLowerCase()
+    const genericPaths = new Set([
+      'p', 'explore', 'reel', 'reels', 'stories', 'accounts',
+      'about', 'legal', 'developer', 'api', 'direct', 'tv',
+      'share', 'sharer', 'intent', 'dialog',
+    ])
+    if (genericPaths.has(handle)) return null
+    return handle
+  } catch {
+    return null
+  }
+}
 
 export async function scrapeWebsite(inputUrl: string): Promise<WebsiteData> {
   const start = Date.now()
@@ -19,12 +42,23 @@ export async function scrapeWebsite(inputUrl: string): Promise<WebsiteData> {
     themeColor: null,
     brandColors: { backgroundColor: null, accentColor: null, headerBackground: null, source: null, confidence: 0, candidates: [] },
     scrapeDurationMs: 0,
+    websiteType: 'website',
   }
 
   // Normalize URL
   let url = inputUrl.trim()
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
     url = `https://${url}`
+  }
+
+  // Instagram-as-Website detection: check URL before scraping
+  const igHandle = detectInstagramUrl(url)
+  if (igHandle) {
+    result.websiteType = 'instagram-only'
+    result.socialLinks.instagram = igHandle
+    result.scrapeDurationMs = Date.now() - start
+    console.log(`[Scraper] Instagram-only URL detected: @${igHandle} — skipping website scrape`)
+    return result
   }
 
   let html: string
@@ -54,7 +88,25 @@ export async function scrapeWebsite(inputUrl: string): Promise<WebsiteData> {
       return result
     }
 
+    // Fix 4: Only accept HTML responses — reject PDFs, images, etc.
+    const contentType = response.headers.get('content-type') || ''
+    if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+      result.error = `Kein HTML (Content-Type: ${contentType.split(';')[0]})`
+      result.scrapeDurationMs = Date.now() - start
+      return result
+    }
+
     html = await response.text()
+
+    // Redirect-to-Instagram detection: website redirected to Instagram
+    const redirectIgHandle = detectInstagramUrl(result.finalUrl)
+    if (redirectIgHandle) {
+      result.websiteType = 'redirect-to-instagram'
+      result.socialLinks.instagram = redirectIgHandle
+      result.scrapeDurationMs = Date.now() - start
+      console.log(`[Scraper] Website redirected to Instagram: @${redirectIgHandle}`)
+      return result
+    }
   } catch (err) {
     result.error = err instanceof Error && err.name === 'AbortError'
       ? 'Timeout (8s)'

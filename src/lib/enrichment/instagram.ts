@@ -21,10 +21,11 @@ export async function fetchInstagramAvatar(handle: string): Promise<Buffer | nul
   const cleanHandle = handle.replace(/^@/, '').trim()
   if (!cleanHandle || cleanHandle.length < 2) return null
 
-  // Try each UA until one works
-  for (const ua of USER_AGENTS) {
+  // Try each UA until one works, with delay between attempts
+  for (let i = 0; i < USER_AGENTS.length; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 200))
     try {
-      const result = await tryFetchAvatar(cleanHandle, ua)
+      const result = await tryFetchAvatar(cleanHandle, USER_AGENTS[i])
       if (result) return result
     } catch { /* try next UA */ }
   }
@@ -83,7 +84,7 @@ async function tryFetchAvatar(cleanHandle: string, userAgent: string): Promise<B
     // Remove circular background using sharp
     const { default: sharp } = await import('sharp')
     const resized = await sharp(buf)
-      .resize(256, 256, { fit: 'cover' })
+      .resize(320, 320, { fit: 'cover' })
       .removeAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true })

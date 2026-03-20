@@ -533,6 +533,15 @@ async function waterfallFallback(ctx: {
     labelColor = ensureLabelContrast(labelColor, bg)
   }
 
+  // Fix 6: Saturation guard — if label is gray, derive a colorful one
+  if (colorSaturation(labelColor) < 0.1) {
+    const bgHsl = hexToHsl(bg)
+    const targetL = bgHsl.l < 0.5 ? 0.65 : 0.35
+    labelColor = hslToHex(bgHsl.h, Math.max(bgHsl.s, 0.25), targetL)
+    labelColor = ensureLabelContrast(labelColor, bg)
+    log(`Label saturation guard: forced colorful label → ${labelColor}`)
+  }
+
   log(`RESULT: bg=${bg} text=${textColor} label=${labelColor} method=${method}`)
 
   // ═══ FINAL VALIDATION ══════════════════════════════════════

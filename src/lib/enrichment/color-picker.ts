@@ -108,37 +108,45 @@ export async function pickBrandColors(
 
     const client = new Anthropic()
 
-    const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 100,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: 'image/png',
-                data: screenshotResized.toString('base64'),
+    // 10s timeout to prevent hanging API calls
+    const apiAbort = new AbortController()
+    const apiTimeout = setTimeout(() => apiAbort.abort(), 10000)
+
+    const response = await client.messages.create(
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: screenshotResized.toString('base64'),
+                },
               },
-            },
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: 'image/png',
-                data: logoThumbnail.toString('base64'),
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: logoThumbnail.toString('base64'),
+                },
               },
-            },
-            {
-              type: 'text',
-              text: prompt,
-            },
-          ],
-        },
-      ],
-    })
+              {
+                type: 'text',
+                text: prompt,
+              },
+            ],
+          },
+        ],
+      },
+      { signal: apiAbort.signal }
+    )
+    clearTimeout(apiTimeout)
 
     const text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')
@@ -151,9 +159,20 @@ export async function pickBrandColors(
       return null
     }
 
-    const parsed = JSON.parse(jsonMatch[0])
-    const rawBg = typeof parsed.background === 'string' ? parsed.background : null
-    const rawLabel = typeof parsed.label === 'string' ? parsed.label : null
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(jsonMatch[0])
+    } catch {
+      console.log(`[AI Colors] Failed to parse JSON: ${jsonMatch[0]}`)
+      return null
+    }
+    // Fix 5: Accept flexible keys (bg/background, accent/label)
+    const rawBg = typeof parsed.background === 'string' ? parsed.background
+      : typeof parsed.bg === 'string' ? parsed.bg
+      : null
+    const rawLabel = typeof parsed.label === 'string' ? parsed.label
+      : typeof parsed.accent === 'string' ? parsed.accent
+      : null
     const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0
 
     console.log(`[AI Colors] Raw response: bg=${rawBg} label=${rawLabel} confidence=${confidence}`)

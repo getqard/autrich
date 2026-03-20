@@ -29,7 +29,7 @@ export async function captureWebsite(url: string): Promise<Buffer | null> {
     const apiUrl = `https://api.screenshotone.com/take?${params.toString()}`
 
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 10000)
+    const timeout = setTimeout(() => controller.abort(), 18000)
 
     const res = await fetch(apiUrl, { signal: controller.signal })
     clearTimeout(timeout)

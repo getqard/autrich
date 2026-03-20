@@ -58,6 +58,7 @@ type ScrapeResult = {
   themeColor: string | null
   brandColors: BrandColors
   scrapeDurationMs: number
+  websiteType?: 'website' | 'instagram-only' | 'redirect-to-instagram' | 'no-website'
   error?: string
   enrichmentPreview?: EnrichmentPreview
 }
@@ -174,6 +175,21 @@ export default function ScraperPage() {
       {/* Results */}
       {result && (
         <div className="space-y-6">
+          {/* Instagram-only indicator */}
+          {(result.websiteType === 'instagram-only' || result.websiteType === 'redirect-to-instagram') && (
+            <div className="bg-purple-500/10 border border-purple-500/20 rounded-xl p-4">
+              <div className="flex items-center gap-2 text-purple-400 text-sm">
+                <AlertTriangle size={16} />
+                {result.websiteType === 'instagram-only'
+                  ? 'Instagram-URL erkannt — Website-Scraping & Screenshot übersprungen'
+                  : 'Website leitet zu Instagram weiter — als Instagram-Only behandelt'}
+                {result.socialLinks?.instagram && (
+                  <span className="text-purple-300 font-mono ml-1">@{result.socialLinks.instagram}</span>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Warning if partial result */}
           {result.error && (
             <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
@@ -603,6 +619,7 @@ const LOGO_SOURCE_STYLES: Record<string, { bg: string; text: string; label: stri
   brandfetch: { bg: 'bg-blue-500/10', text: 'text-blue-400', label: 'Brandfetch' },
   'brandfetch-lettermark': { bg: 'bg-blue-500/10', text: 'text-blue-300', label: 'Brandfetch LM' },
   website: { bg: 'bg-green-500/10', text: 'text-green-400', label: 'Website' },
+  instagram: { bg: 'bg-purple-500/10', text: 'text-purple-400', label: 'Instagram' },
   gmaps: { bg: 'bg-orange-500/10', text: 'text-orange-400', label: 'GMaps' },
   favicon: { bg: 'bg-zinc-700', text: 'text-zinc-400', label: 'Favicon' },
   generated: { bg: 'bg-red-500/10', text: 'text-red-400', label: 'Generiert' },

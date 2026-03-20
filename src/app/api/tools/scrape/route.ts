@@ -18,11 +18,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'URL ist erforderlich' }, { status: 400 })
     }
 
-    // Parallel: Scrape website + capture header screenshot
-    const [result, headerScreenshot] = await Promise.all([
-      scrapeWebsite(url),
-      captureWebsite(url),
-    ])
+    // Scrape website first to detect instagram-only
+    const result = await scrapeWebsite(url)
+
+    // Skip screenshot for instagram-only URLs
+    const isInstagramOnly = result.websiteType === 'instagram-only' || result.websiteType === 'redirect-to-instagram'
+    const headerScreenshot = isInstagramOnly ? null : await captureWebsite(url)
 
     // ─── Enrichment Preview ─────────────────────────────────
 
@@ -42,16 +43,61 @@ export async function POST(request: NextRequest) {
       let logoBuffer: Buffer | null = null
       let logoSource: string | null = null
 
+      // Instagram-only: skip normal logo pipeline, just fetch avatar
+      if (isInstagramOnly && result.socialLinks?.instagram) {
+        try {
+          const igBuffer = await fetchInstagramAvatar(result.socialLinks.instagram)
+          if (igBuffer) {
+            logoBuffer = igBuffer
+            logoSource = 'instagram'
+          }
+        } catch { /* non-fatal */ }
+
+        if (!logoBuffer && business_name) {
+          logoBuffer = await generateInitialsLogo(business_name, '#1a1a2e')
+          logoSource = 'generated'
+        }
+
+        // Skip to colors with no CSS candidates
+        const industryDefaults = null
+        const passColors = await determinePassColors({
+          logoBuffer,
+          cssCandidates: [],
+          headerBackground: null,
+          headerScreenshot: null,
+          websiteContext: { title: null, description: null, themeColor: null },
+          industrySlug: null,
+          industryDefaults,
+          gmapsPhotoBuffer: null,
+        })
+
+        enrichmentPreview = {
+          logo: logoBuffer && logoSource ? { base64: logoBuffer.toString('base64'), source: logoSource } : null,
+          colors: null,
+          industry: null,
+          passPreview: {
+            bg: passColors.backgroundColor,
+            text: passColors.textColor,
+            label: passColors.labelColor,
+            method: passColors.method,
+          },
+        }
+
+        return NextResponse.json({ ...result, enrichmentPreview })
+      }
+
       // Extract domain
       const domain = new URL(url).hostname.replace(/^www\./, '')
 
-      // 1. Brandfetch (but skip lettermarks — they're generic)
+      // 1. Brandfetch (lettermarks stored separately as last-resort)
       let brandfetchBuffer: Buffer | null = null
       let brandfetchSource: string | null = null
+      let brandfetchLettermarkBuffer: Buffer | null = null
       const bf = await fetchBrandfetchLogo(domain)
       if (bf) {
         if (bf.source === 'brandfetch-lettermark') {
-          console.log('[Scrape] Brandfetch returned lettermark, skipping')
+          console.log('[Scrape] Brandfetch returned lettermark, saving as fallback')
+          brandfetchLettermarkBuffer = bf.buffer
         } else {
           brandfetchBuffer = bf.buffer
           brandfetchSource = bf.source
@@ -100,7 +146,17 @@ export async function POST(request: NextRequest) {
               })
               clearTimeout(timeout)
               if (!logoRes.ok) throw new Error(`HTTP ${logoRes.status}`)
+              // Fix 3: Skip logos > 5MB
+              const contentLength = logoRes.headers.get('content-length')
+              if (contentLength && parseInt(contentLength) > 5 * 1024 * 1024) {
+                console.log(`[Scrape] Logo too large (${contentLength}B), skipping`)
+                throw new Error('Logo too large')
+              }
               buf = Buffer.from(await logoRes.arrayBuffer())
+              if (buf.length > 5 * 1024 * 1024) {
+                console.log(`[Scrape] Logo too large after download (${buf.length}B), skipping`)
+                throw new Error('Logo too large')
+              }
             }
             if (buf.length > 500) {
               logoBuffer = buf
@@ -136,7 +192,14 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 4. Generated initials
+      // 4. Brandfetch lettermark (better than generated)
+      if (!logoBuffer && brandfetchLettermarkBuffer) {
+        logoBuffer = brandfetchLettermarkBuffer
+        logoSource = 'brandfetch-lettermark'
+        console.log('[Scrape] Using Brandfetch lettermark as last-resort before generated')
+      }
+
+      // 5. Generated initials
       if (!logoBuffer && business_name) {
         logoBuffer = await generateInitialsLogo(business_name, '#1a1a2e')
         logoSource = 'generated'
