@@ -1,22 +1,19 @@
 /**
  * Gemini Flash Client — Lightweight wrapper around the Gemini REST API.
  *
- * Used for: Classification, Logo Picking, Color Picking
- * NOT used for: Email Writing (stays on Claude Haiku for natural German text)
+ * Two models:
+ *   - TEXT:   gemini-2.5-flash-lite ($0.10/$0.40) — Classification, Creative Content
+ *   - VISION: gemini-2.5-flash ($0.30/$2.50) — Logo Picking, Color Picking
  *
- * Cost: ~$0.10/MTok input, $0.40/MTok output (10x cheaper than Haiku)
+ * NOT used for: Email Writing (stays on Claude Haiku for natural German text)
  */
 
-const GEMINI_MODEL = 'gemini-2.5-flash-lite'
+const GEMINI_TEXT_MODEL = 'gemini-2.5-flash-lite'
+const GEMINI_VISION_MODEL = 'gemini-2.5-flash'
 
 type GeminiPart =
   | { text: string }
   | { inlineData: { mimeType: string; data: string } }
-
-type GeminiContent = {
-  role?: 'user' | 'model'
-  parts: GeminiPart[]
-}
 
 type GeminiResponse = {
   candidates?: Array<{
@@ -39,7 +36,8 @@ export type GeminiResult = {
 }
 
 /**
- * Call Gemini Flash with text-only input.
+ * Call Gemini Flash-Lite with text-only input.
+ * Used for: Classification, Creative Content Generation
  */
 export async function geminiText(
   systemPrompt: string,
@@ -49,7 +47,7 @@ export async function geminiText(
   const apiKey = process.env.GEMINI_API_KEY
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured')
 
-  const response = await callGemini(apiKey, {
+  const response = await callGemini(apiKey, GEMINI_TEXT_MODEL, {
     systemInstruction: { parts: [{ text: systemPrompt }] },
     contents: [{ role: 'user', parts: [{ text: userMessage }] }],
     generationConfig: {
@@ -58,11 +56,12 @@ export async function geminiText(
     },
   })
 
-  return parseResponse(response)
+  return parseResponse(response, GEMINI_TEXT_MODEL)
 }
 
 /**
  * Call Gemini Flash with vision input (images + text).
+ * Used for: Color Picking (screenshot + logo → brand colors)
  */
 export async function geminiVision(
   images: Array<{ buffer: Buffer; mimeType?: string }>,
@@ -85,7 +84,7 @@ export async function geminiVision(
 
   parts.push({ text: prompt })
 
-  const response = await callGemini(apiKey, {
+  const response = await callGemini(apiKey, GEMINI_VISION_MODEL, {
     contents: [{ role: 'user', parts }],
     generationConfig: {
       maxOutputTokens: options?.maxTokens || 256,
@@ -93,11 +92,12 @@ export async function geminiVision(
     },
   })
 
-  return parseResponse(response)
+  return parseResponse(response, GEMINI_VISION_MODEL)
 }
 
 /**
  * Call Gemini Flash with labeled images (interleaved text + images).
+ * Used for: Logo Picking (multiple thumbnails → pick the real logo)
  */
 export async function geminiLabeledVision(
   labeledImages: Array<{ label: string; buffer: Buffer; mimeType?: string }>,
@@ -121,7 +121,7 @@ export async function geminiLabeledVision(
 
   parts.push({ text: finalPrompt })
 
-  const response = await callGemini(apiKey, {
+  const response = await callGemini(apiKey, GEMINI_VISION_MODEL, {
     contents: [{ role: 'user', parts }],
     generationConfig: {
       maxOutputTokens: options?.maxTokens || 100,
@@ -129,13 +129,13 @@ export async function geminiLabeledVision(
     },
   })
 
-  return parseResponse(response)
+  return parseResponse(response, GEMINI_VISION_MODEL)
 }
 
 // ─── Internal ────────────────────────────────────────────────
 
-async function callGemini(apiKey: string, body: Record<string, unknown>): Promise<GeminiResponse> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`
+async function callGemini(apiKey: string, model: string, body: Record<string, unknown>): Promise<GeminiResponse> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15000)
@@ -156,15 +156,19 @@ async function callGemini(apiKey: string, body: Record<string, unknown>): Promis
   return res.json()
 }
 
-function parseResponse(response: GeminiResponse): GeminiResult {
+function parseResponse(response: GeminiResponse, model: string): GeminiResult {
   const text = response.candidates?.[0]?.content?.parts
     ?.map(p => p.text)
     .join('') || ''
 
   const tokensIn = response.usageMetadata?.promptTokenCount || 0
   const tokensOut = response.usageMetadata?.candidatesTokenCount || 0
-  // Gemini 2.0 Flash: $0.10/MTok input, $0.40/MTok output
-  const costUsd = (tokensIn * 0.10 + tokensOut * 0.40) / 1_000_000
+
+  // Pricing per model
+  const isLite = model === GEMINI_TEXT_MODEL
+  const inputRate = isLite ? 0.10 : 0.30
+  const outputRate = isLite ? 0.40 : 2.50
+  const costUsd = (tokensIn * inputRate + tokensOut * outputRate) / 1_000_000
 
   return { text, tokensIn, tokensOut, costUsd }
 }
