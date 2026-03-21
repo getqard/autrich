@@ -22,14 +22,14 @@ export async function captureWebsite(url: string): Promise<Buffer | null> {
       format: 'png',
       block_cookie_banners: 'true',
       block_chats: 'true',
-      delay: '2',
-      timeout: '15',
+      delay: '5',
+      timeout: '20',
     })
 
     const apiUrl = `https://api.screenshotone.com/take?${params.toString()}`
 
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 18000)
+    const timeout = setTimeout(() => controller.abort(), 25000)
 
     const res = await fetch(apiUrl, { signal: controller.signal })
     clearTimeout(timeout)
