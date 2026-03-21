@@ -327,7 +327,9 @@ async function cssFallback(ctx: {
   }
 
   // ─── STEP 3: Best CSS background with logo contrast ────────
-  if (!bg && cssCandidates.length > 0) {
+  // Only trust CSS if we have enough data (≥3 candidates or ≥1 high-confidence)
+  const hasReliableCSS = cssCandidates.length >= 3 || cssCandidates.some(c => c.confidence >= 0.75)
+  if (!bg && hasReliableCSS) {
     // Sort by: dark colors first, then by confidence
     const bgOptions = cssCandidates
       .filter(c => {
