@@ -1,15 +1,15 @@
 /**
- * AI Brand Color Picker — Gemini Flash Vision
+ * AI Brand Color Picker — Claude Haiku Vision
  *
- * Sends website screenshot + logo as TWO images to Gemini Flash.
+ * Sends website screenshot + logo as TWO separate images to Haiku.
  * AI picks background + label colors directly from the brand identity.
  * Post-processing only does accessibility adjustments.
  *
- * Cost: ~$0.0001-0.0002 per call (10x cheaper than Claude Haiku Vision)
+ * Cost: ~$0.001-0.002 per call (2 images + short text, Haiku)
  */
 
+import Anthropic from '@anthropic-ai/sdk'
 import sharp from 'sharp'
-import { geminiVision, extractJson } from '@/lib/ai/gemini'
 import { hexLuminance, wcagContrastRatio, colorSaturation, hexToHsl, hslToHex, ensurePassSuitable } from './colors'
 
 export type AIColorResult = {
@@ -54,17 +54,17 @@ function validateLabel(rawLabel: string | null, bg: string, adjustments: string[
 }
 
 /**
- * Use Gemini Flash Vision to pick brand colors for a Wallet Pass.
+ * Use Claude Haiku Vision to pick brand colors for a Wallet Pass.
  *
- * Sends two images: website screenshot + logo thumbnail.
+ * Sends two separate images: website screenshot + logo thumbnail.
  * Returns null if no API key, no screenshot, API error, or post-validation fails.
  */
 export async function pickBrandColors(
   logoBuffer: Buffer,
   websiteScreenshot: Buffer | null,
 ): Promise<AIColorResult | null> {
-  if (!process.env.GEMINI_API_KEY) {
-    console.log('[AI Colors] No GEMINI_API_KEY, skipping')
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.log('[AI Colors] No ANTHROPIC_API_KEY, skipping')
     return null
   }
   if (!websiteScreenshot || websiteScreenshot.length < 1000) {
@@ -85,7 +85,7 @@ export async function pickBrandColors(
       .png()
       .toBuffer()
 
-    console.log(`[AI Colors] Sending to Gemini Flash: screenshot=${(screenshotResized.length / 1024).toFixed(0)}KB logo=${(logoThumbnail.length / 1024).toFixed(0)}KB`)
+    console.log(`[AI Colors] Sending to Haiku: screenshot=${(screenshotResized.length / 1024).toFixed(0)}KB logo=${(logoThumbnail.length / 1024).toFixed(0)}KB`)
 
     const prompt = [
       'Du siehst den Screenshot einer Website und das Logo eines Unternehmens.',
@@ -106,19 +106,67 @@ export async function pickBrandColors(
       'Antworte NUR mit JSON: {"background":"#hex","label":"#hex","confidence":0.9}',
     ].join('\n')
 
-    const result = await geminiVision(
-      [
-        { buffer: screenshotResized },
-        { buffer: logoThumbnail },
-      ],
-      prompt,
-      { maxTokens: 100, temperature: 0.2 }
+    const client = new Anthropic()
+
+    // 10s timeout to prevent hanging API calls
+    const apiAbort = new AbortController()
+    const apiTimeout = setTimeout(() => apiAbort.abort(), 10000)
+
+    const response = await client.messages.create(
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: screenshotResized.toString('base64'),
+                },
+              },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: logoThumbnail.toString('base64'),
+                },
+              },
+              {
+                type: 'text',
+                text: prompt,
+              },
+            ],
+          },
+        ],
+      },
+      { signal: apiAbort.signal }
     )
+    clearTimeout(apiTimeout)
 
-    const jsonStr = extractJson(result.text)
-    const parsed = JSON.parse(jsonStr) as Record<string, unknown>
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('')
 
-    // Accept flexible keys (bg/background, accent/label)
+    const jsonMatch = text.match(/\{[^}]+\}/)
+    if (!jsonMatch) {
+      console.log(`[AI Colors] No JSON in response: ${text.substring(0, 200)}`)
+      return null
+    }
+
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(jsonMatch[0])
+    } catch {
+      console.log(`[AI Colors] Failed to parse JSON: ${jsonMatch[0]}`)
+      return null
+    }
+    // Fix 5: Accept flexible keys (bg/background, accent/label)
     const rawBg = typeof parsed.background === 'string' ? parsed.background
       : typeof parsed.bg === 'string' ? parsed.bg
       : null
@@ -127,7 +175,7 @@ export async function pickBrandColors(
       : null
     const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0
 
-    console.log(`[AI Colors] Gemini raw: bg=${rawBg} label=${rawLabel} confidence=${confidence}`)
+    console.log(`[AI Colors] Raw response: bg=${rawBg} label=${rawLabel} confidence=${confidence}`)
 
     if (!rawBg || !isValidHex(rawBg)) {
       console.log(`[AI Colors] Invalid background hex: ${rawBg}`)
@@ -168,7 +216,7 @@ export async function pickBrandColors(
       confidence,
     }
   } catch (err) {
-    console.error('[AI Colors] Gemini failed (non-fatal):', err instanceof Error ? err.message : err)
+    console.error('[AI Colors] Failed (non-fatal):', err instanceof Error ? err.message : err)
     return null
   }
 }

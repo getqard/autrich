@@ -1,5 +1,5 @@
+import Anthropic from '@anthropic-ai/sdk'
 import sharp from 'sharp'
-import { geminiLabeledVision, extractJson } from '@/lib/ai/gemini'
 import type { LogoCandidate } from './types'
 
 type PickResult = {
@@ -8,13 +8,11 @@ type PickResult = {
 }
 
 /**
- * Use Gemini Flash Vision to pick the best logo from a list of candidates.
+ * Use Claude Haiku Vision to pick the best logo from a list of candidates.
  * Sends top 5 candidates as 128px thumbnails → AI picks the real logo.
  *
- * ~10x cheaper than Claude Haiku Vision for the same task.
- *
  * Returns null if:
- * - No GEMINI_API_KEY
+ * - No ANTHROPIC_API_KEY
  * - API call fails
  * - Less than 2 candidates (no point in asking AI to choose from 1)
  */
@@ -22,7 +20,7 @@ export async function pickBestLogo(
   candidates: LogoCandidate[],
   businessName: string
 ): Promise<PickResult | null> {
-  if (!process.env.GEMINI_API_KEY) return null
+  if (!process.env.ANTHROPIC_API_KEY) return null
   if (candidates.length < 2) return null
 
   const top = candidates.slice(0, 5)
@@ -50,28 +48,77 @@ export async function pickBestLogo(
   const validThumbnails = thumbnails.filter((t): t is { index: number; buffer: Buffer } => t !== null)
   if (validThumbnails.length < 2) return null
 
-  // Build labeled images for Gemini
-  const labeledImages = validThumbnails.map((t, i) => ({
-    label: `Bild ${i + 1}:`,
-    buffer: t.buffer,
+  // Build vision message with all thumbnails
+  const imageContent: Anthropic.ImageBlockParam[] = validThumbnails.map((t) => ({
+    type: 'image' as const,
+    source: {
+      type: 'base64' as const,
+      media_type: 'image/png' as const,
+      data: t.buffer.toString('base64'),
+    },
   }))
 
-  const prompt = [
-    `Du siehst ${validThumbnails.length} Bilder. Eines davon ist das Hauptlogo des Unternehmens "${businessName}".`,
-    `Welches Bild (1-${validThumbnails.length}) ist das Logo? Antworte NUR mit JSON: {"pick": 3, "confidence": 0.95}`,
-    'Regeln:',
-    '- Favicons/Icons mit wenig Detail sind NICHT das Logo (es sei denn, es gibt nichts besseres)',
-    '- Hero-Bilder/Fotos sind NICHT das Logo',
-    '- Das Logo ist typischerweise ein Grafikzeichen, Schriftzug oder beides',
-    '- Wenn keins ein Logo ist: {"pick": 0, "confidence": 0}',
-  ].join('\n')
+  // Interleave images with labels
+  const contentBlocks: Anthropic.ContentBlockParam[] = []
+  for (let i = 0; i < validThumbnails.length; i++) {
+    contentBlocks.push({
+      type: 'text',
+      text: `Bild ${i + 1}:`,
+    })
+    contentBlocks.push(imageContent[i])
+  }
+
+  contentBlocks.push({
+    type: 'text',
+    text: [
+      `Du siehst ${validThumbnails.length} Bilder. Eines davon ist das Hauptlogo des Unternehmens "${businessName}".`,
+      `Welches Bild (1-${validThumbnails.length}) ist das Logo? Antworte NUR mit JSON: {"pick": 3, "confidence": 0.95}`,
+      'Regeln:',
+      '- Favicons/Icons mit wenig Detail sind NICHT das Logo (es sei denn, es gibt nichts besseres)',
+      '- Hero-Bilder/Fotos sind NICHT das Logo',
+      '- Das Logo ist typischerweise ein Grafikzeichen, Schriftzug oder beides',
+      '- Wenn keins ein Logo ist: {"pick": 0, "confidence": 0}',
+    ].join('\n'),
+  })
 
   try {
-    const result = await geminiLabeledVision(labeledImages, prompt, { maxTokens: 50, temperature: 0.1 })
+    const client = new Anthropic()
 
-    const jsonStr = extractJson(result.text)
-    const parsed = JSON.parse(jsonStr) as Record<string, unknown>
+    // 10s timeout to prevent hanging API calls
+    const apiAbort = new AbortController()
+    const apiTimeout = setTimeout(() => apiAbort.abort(), 10000)
 
+    const response = await client.messages.create(
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 50,
+        messages: [
+          {
+            role: 'user',
+            content: contentBlocks,
+          },
+        ],
+      },
+      { signal: apiAbort.signal }
+    )
+    clearTimeout(apiTimeout)
+
+    // Parse response
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('')
+
+    const jsonMatch = text.match(/\{[^}]+\}/)
+    if (!jsonMatch) return null
+
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(jsonMatch[0])
+    } catch {
+      console.error('[AI Logo Picker] Failed to parse JSON:', jsonMatch[0])
+      return null
+    }
     const pick = typeof parsed.pick === 'number' ? parsed.pick : 0
     const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0
 
@@ -81,11 +128,11 @@ export async function pickBestLogo(
     const thumbnailIdx = pick - 1
     const originalIdx = validThumbnails[thumbnailIdx].index
 
-    console.log(`[AI Logo Picker] Gemini chose candidate #${originalIdx + 1} (${top[originalIdx].source}, score ${top[originalIdx].score}) with confidence ${confidence} for "${businessName}"`)
+    console.log(`[AI Logo Picker] Chose candidate #${originalIdx + 1} (${top[originalIdx].source}, score ${top[originalIdx].score}) with confidence ${confidence} for "${businessName}"`)
 
     return { index: originalIdx, confidence }
   } catch (err) {
-    console.error('[AI Logo Picker] Gemini failed (non-fatal):', err instanceof Error ? err.message : err)
+    console.error('[AI Logo Picker] Failed (non-fatal):', err instanceof Error ? err.message : err)
     return null
   }
 }
@@ -99,6 +146,7 @@ async function fetchImageBuffer(url: string): Promise<Buffer | null> {
     if (url.startsWith('data:')) {
       const commaIdx = url.indexOf(',')
       if (commaIdx === -1) return null
+      // Skip data: URIs > 2MB
       if (url.length > 2 * 1024 * 1024) return null
       const header = url.substring(0, commaIdx).toLowerCase()
       const data = url.substring(commaIdx + 1)
@@ -119,6 +167,7 @@ async function fetchImageBuffer(url: string): Promise<Buffer | null> {
     if (!res.ok) return null
 
     const buf = Buffer.from(await res.arrayBuffer())
+    // Skip tiny files (tracking pixels etc.)
     if (buf.length < 200) return null
 
     return buf
