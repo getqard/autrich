@@ -1,13 +1,14 @@
 /**
- * AI Brand Color Picker — Gemini 3 Flash Vision
+ * AI Brand Color Picker — Claude Haiku Vision
  *
- * Sends website screenshot + logo + CSS color list to Gemini 3 Flash.
- * AI picks background + label from REAL website colors (CSS as ground truth).
+ * Sends website screenshot + logo to Haiku.
+ * CSS colors from the website are passed as optional context (not required).
  * Post-processing: accessibility adjustments + logo visibility check.
  *
- * Cost: ~$0.0005 per call ($0.50/$3.00 per MTok, 2 images + short text)
+ * Cost: ~$0.001-0.002 per call
  */
 
+import Anthropic from '@anthropic-ai/sdk'
 import sharp from 'sharp'
 import type { ColorCandidate } from './types'
 import { hexLuminance, wcagContrastRatio, colorSaturation, hexToHsl, hslToHex, ensurePassSuitable } from './colors'
@@ -17,8 +18,6 @@ export type AIColorResult = {
   label: string | null
   confidence: number
 }
-
-const GEMINI_VISION_MODEL = 'gemini-3-flash-preview'
 
 function validateLabel(rawLabel: string | null, bg: string, adjustments: string[]): string | null {
   if (!rawLabel || !isValidHex(rawLabel)) return null
@@ -55,62 +54,18 @@ function validateLabel(rawLabel: string | null, bg: string, adjustments: string[
 }
 
 /**
- * Analyze logo to determine if it's predominantly dark or light.
- */
-async function analyzeLogoLuminance(logoBuffer: Buffer): Promise<{ avgLuminance: number; isDark: boolean; dominantHex: string }> {
-  try {
-    const { data } = await sharp(logoBuffer)
-      .resize(64, 64, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } })
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true })
-
-    let totalLum = 0
-    let count = 0
-    let totalR = 0, totalG = 0, totalB = 0
-
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3]
-      if (a < 128) continue
-      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-      if (lum > 0.95) continue
-      totalLum += lum
-      totalR += r
-      totalG += g
-      totalB += b
-      count++
-    }
-
-    if (count === 0) return { avgLuminance: 0.5, isDark: false, dominantHex: '#808080' }
-
-    const avgLum = totalLum / count
-    const avgR = Math.round(totalR / count)
-    const avgG = Math.round(totalG / count)
-    const avgB = Math.round(totalB / count)
-    const dominantHex = `#${avgR.toString(16).padStart(2, '0')}${avgG.toString(16).padStart(2, '0')}${avgB.toString(16).padStart(2, '0')}`
-
-    console.log(`[AI Colors] Logo analysis: avgLum=${avgLum.toFixed(2)}, isDark=${avgLum < 0.4}, dominant=${dominantHex}`)
-
-    return { avgLuminance: avgLum, isDark: avgLum < 0.4, dominantHex }
-  } catch {
-    return { avgLuminance: 0.5, isDark: false, dominantHex: '#808080' }
-  }
-}
-
-/**
- * Use Gemini 3 Flash Vision to pick brand colors for a Wallet Pass.
+ * Use Claude Haiku Vision to pick brand colors for a Wallet Pass.
  *
- * Key improvement: CSS colors from the website are passed as ground truth,
- * so the AI picks from REAL colors instead of hallucinating.
+ * CSS colors are passed as optional context to help the AI pick real colors.
+ * Returns null if no API key, no screenshot, API error, or post-validation fails.
  */
 export async function pickBrandColors(
   logoBuffer: Buffer,
   websiteScreenshot: Buffer | null,
   cssCandidates?: ColorCandidate[],
 ): Promise<AIColorResult | null> {
-  const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) {
-    console.log('[AI Colors] No GEMINI_API_KEY, skipping')
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.log('[AI Colors] No ANTHROPIC_API_KEY, skipping')
     return null
   }
   if (!websiteScreenshot || websiteScreenshot.length < 1000) {
@@ -119,8 +74,6 @@ export async function pickBrandColors(
   }
 
   try {
-    const logoInfo = await analyzeLogoLuminance(logoBuffer)
-
     const screenshotResized = await sharp(websiteScreenshot)
       .resize(720, 450, { fit: 'cover' })
       .png()
@@ -131,89 +84,91 @@ export async function pickBrandColors(
       .png()
       .toBuffer()
 
-    console.log(`[AI Colors] Sending to Gemini 3 Flash: screenshot=${(screenshotResized.length / 1024).toFixed(0)}KB logo=${(logoThumbnail.length / 1024).toFixed(0)}KB logoDark=${logoInfo.isDark} cssCandidates=${cssCandidates?.length || 0}`)
+    console.log(`[AI Colors] Sending to Haiku: screenshot=${(screenshotResized.length / 1024).toFixed(0)}KB logo=${(logoThumbnail.length / 1024).toFixed(0)}KB cssCandidates=${cssCandidates?.length || 0}`)
 
-    // Build CSS color list for ground truth
-    let cssColorList = ''
+    // Build CSS color context (optional, helps AI pick real colors)
+    let cssContext = ''
     if (cssCandidates && cssCandidates.length > 0) {
       const uniqueColors = [...new Set(cssCandidates.map(c => c.hex.toLowerCase()))]
-      const colorDescriptions = uniqueColors.slice(0, 15).map(hex => {
+      const colorLines = uniqueColors.slice(0, 15).map(hex => {
         const c = cssCandidates.find(cc => cc.hex.toLowerCase() === hex)!
-        return `  ${hex} (${c.role}, ${c.source}, confidence=${c.confidence.toFixed(2)})`
+        return `  ${hex} (${c.role}, ${c.source})`
       })
-      cssColorList = [
+      cssContext = [
         '',
-        'ECHTE CSS-FARBEN der Website (Ground Truth):',
-        ...colorDescriptions,
+        'CSS-Farben der Website (zur Orientierung):',
+        ...colorLines,
         '',
-        'WICHTIG: Wähle die Label-Farbe AUS dieser Liste! Erfinde keine Farben.',
+        'Bevorzuge Label-Farben aus dieser Liste wenn möglich.',
       ].join('\n')
     }
 
-    const logoGuidance = logoInfo.isDark
-      ? [
-          '⚠️ Das Logo ist DUNKEL.',
-          '→ Background MUSS einen guten Kontrast zum dunklen Logo haben.',
-          '→ Wähle eine Farbe mit Luminanz 0.15-0.40, NICHT schwarz/sehr dunkel.',
-        ].join('\n')
-      : [
-          'Das Logo ist hell/weiß — ein dunkler Background (Luminanz 0.05-0.25) ist ideal.',
-        ].join('\n')
-
     const prompt = [
-      'Bild 1: Website-Screenshot. Bild 2: Logo des Unternehmens.',
+      'Du siehst den Screenshot einer Website und das Logo eines Unternehmens.',
       '',
       'Bestimme 2 Farben für eine Apple Wallet Treuekarte:',
       '',
-      '1. BACKGROUND: Die Hauptfarbe der Marke, angepasst an das Logo.',
-      logoGuidance,
+      '1. BACKGROUND: Eine dunkle Farbe die zur Marke passt.',
+      '   - Das Logo wird darauf angezeigt und muss gut sichtbar sein.',
+      '   - Idealerweise eine dunklere Version der Hauptmarkenfarbe.',
+      '   - Luminanz zwischen 0.05 und 0.40 (nicht zu dunkel, nicht zu hell).',
       '',
-      '2. LABEL: Eine farbige Akzentfarbe die EXAKT auf der Website vorkommt.',
-      '   - Buttons, Links, Highlights, Banner — welche Farbe sticht heraus?',
-      '   - Nimm die EXAKTE Hex-Farbe, keine Approximation.',
-      '   - KEIN Grau, Weiß, Schwarz — muss eine echte Brandfarbe sein.',
-      cssColorList,
+      '2. LABEL: Eine saturierte Akzentfarbe die auf dem Background auffällt.',
+      '   - Nimm eine echte Farbe die auf der Website vorkommt (Buttons, Akzente, Highlights).',
+      '   - KEIN Grau, Weiß, Schwarz oder Creme — muss farbig sein.',
+      '   - Muss auf dem Background lesbar sein (guter Kontrast).',
+      cssContext,
       '',
+      'Schau dir die Website GENAU an. Welche Farben definieren diese Marke?',
       'Antworte NUR mit JSON: {"background":"#hex","label":"#hex","confidence":0.9}',
     ].join('\n')
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${apiKey}`
+    const client = new Anthropic()
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 15000)
+    const apiAbort = new AbortController()
+    const apiTimeout = setTimeout(() => apiAbort.abort(), 10000)
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          role: 'user',
-          parts: [
-            { inlineData: { mimeType: 'image/png', data: screenshotResized.toString('base64') } },
-            { inlineData: { mimeType: 'image/png', data: logoThumbnail.toString('base64') } },
-            { text: prompt },
-          ],
-        }],
-        generationConfig: {
-          maxOutputTokens: 100,
-          temperature: 0.2,
-        },
-      }),
-      signal: controller.signal,
-    })
-    clearTimeout(timeout)
+    const response = await client.messages.create(
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: screenshotResized.toString('base64'),
+                },
+              },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: logoThumbnail.toString('base64'),
+                },
+              },
+              {
+                type: 'text',
+                text: prompt,
+              },
+            ],
+          },
+        ],
+      },
+      { signal: apiAbort.signal }
+    )
+    clearTimeout(apiTimeout)
 
-    if (!res.ok) {
-      const errorText = await res.text()
-      throw new Error(`Gemini API error ${res.status}: ${errorText.substring(0, 200)}`)
-    }
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('')
 
-    const response = await res.json()
-    const text = response.candidates?.[0]?.content?.parts
-      ?.map((p: { text: string }) => p.text)
-      .join('') || ''
-
-    // Extract JSON
     const jsonMatch = text.match(/\{[^}]+\}/)
     if (!jsonMatch) {
       console.log(`[AI Colors] No JSON in response: ${text.substring(0, 200)}`)
@@ -227,7 +182,7 @@ export async function pickBrandColors(
       console.log(`[AI Colors] Failed to parse JSON: ${jsonMatch[0]}`)
       return null
     }
-
+    // Accept flexible keys (bg/background, accent/label)
     const rawBg = typeof parsed.background === 'string' ? parsed.background
       : typeof parsed.bg === 'string' ? parsed.bg
       : null
@@ -236,7 +191,7 @@ export async function pickBrandColors(
       : null
     const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0
 
-    console.log(`[AI Colors] Gemini raw: bg=${rawBg} label=${rawLabel} confidence=${confidence}`)
+    console.log(`[AI Colors] Raw response: bg=${rawBg} label=${rawLabel} confidence=${confidence}`)
 
     if (!rawBg || !isValidHex(rawBg)) {
       console.log(`[AI Colors] Invalid background hex: ${rawBg}`)
@@ -250,6 +205,7 @@ export async function pickBrandColors(
     // ─── Post-Validation ──────────────────────────────────────
     const adjustments: string[] = []
 
+    // BG: ensure luminance 0.05-0.40
     let finalBg = rawBg.toLowerCase()
     const bgLum = hexLuminance(finalBg)
     if (bgLum < 0.05 || bgLum > 0.40) {
@@ -259,27 +215,7 @@ export async function pickBrandColors(
       console.log(`[AI Colors] Validation: bg_lum=${bgLum.toFixed(2)} ✓`)
     }
 
-    // Logo visibility check
-    const logoOnBgContrast = estimateLogoContrast(logoInfo, finalBg)
-    if (logoOnBgContrast < 2.0) {
-      console.log(`[AI Colors] ⚠️ Logo contrast on bg too low (${logoOnBgContrast.toFixed(1)}) → adjusting bg`)
-      const hsl = hexToHsl(finalBg)
-      if (logoInfo.isDark) {
-        hsl.l = Math.min(0.40, Math.max(hsl.l, 0.25))
-        if (hsl.s < 0.1) hsl.s = 0.15
-      } else {
-        hsl.l = Math.min(hsl.l, 0.15)
-      }
-      const adjusted = hslToHex(hsl.h, hsl.s, hsl.l)
-      const newContrast = estimateLogoContrast(logoInfo, adjusted)
-      if (newContrast > logoOnBgContrast) {
-        adjustments.push(`logo visibility: contrast ${logoOnBgContrast.toFixed(1)} → ${newContrast.toFixed(1)}, bg ${finalBg} → ${adjusted}`)
-        finalBg = adjusted
-      }
-    } else {
-      console.log(`[AI Colors] Logo visibility: contrast=${logoOnBgContrast.toFixed(1)} ✓`)
-    }
-
+    // Label: validate and adjust
     const finalLabel = validateLabel(rawLabel, finalBg, adjustments)
 
     if (adjustments.length > 0) {
@@ -296,20 +232,9 @@ export async function pickBrandColors(
       confidence,
     }
   } catch (err) {
-    console.error('[AI Colors] Gemini failed (non-fatal):', err instanceof Error ? err.message : err)
+    console.error('[AI Colors] Failed (non-fatal):', err instanceof Error ? err.message : err)
     return null
   }
-}
-
-function estimateLogoContrast(
-  logoInfo: { avgLuminance: number },
-  bgHex: string,
-): number {
-  const bgLum = hexLuminance(bgHex)
-  const logoLum = logoInfo.avgLuminance
-  const lighter = Math.max(bgLum, logoLum)
-  const darker = Math.min(bgLum, logoLum)
-  return (lighter + 0.05) / (darker + 0.05)
 }
 
 function isValidHex(s: string): boolean {

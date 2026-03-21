@@ -180,10 +180,7 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   // STEP 1: AI Vision (only with good screenshot + enough CSS data)
   // ═══════════════════════════════════════════════════════════
 
-  const screenshotUsable = headerScreenshot && headerScreenshot.length > 20000
-  const hasCSSData = cssCandidates.length >= 3
-
-  if (rasterLogo && screenshotUsable && hasCSSData) {
+  if (rasterLogo && headerScreenshot) {
     try {
       const aiColors = await pickBrandColors(rasterLogo, headerScreenshot, cssCandidates)
 
@@ -226,11 +223,7 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
       log(`AI Vision ERROR: ${err instanceof Error ? err.message : err} → falling back`)
     }
   } else {
-    const reasons = []
-    if (!rasterLogo) reasons.push('no logo')
-    if (!screenshotUsable) reasons.push(`screenshot too small (${headerScreenshot?.length || 0}B)`)
-    if (!hasCSSData) reasons.push(`too few CSS candidates (${cssCandidates.length})`)
-    log(`AI Vision skipped: ${reasons.join(', ')} → using CSS-based`)
+    log(`AI Vision skipped: ${!rasterLogo ? 'no logo' : 'no screenshot'} → using CSS-based`)
   }
 
   // ═══════════════════════════════════════════════════════════
