@@ -18,7 +18,7 @@ export async function captureWebsite(url: string): Promise<Buffer | null> {
       url,
       viewport_width: '1440',
       viewport_height: '900',
-      full_page: 'true',
+      full_page: 'false',
       format: 'png',
       block_cookie_banners: 'true',
       block_chats: 'true',
