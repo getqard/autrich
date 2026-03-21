@@ -7,7 +7,7 @@
  * Cost: ~$0.10/MTok input, $0.40/MTok output (10x cheaper than Haiku)
  */
 
-const GEMINI_MODEL = 'gemini-2.0-flash'
+const GEMINI_MODEL = 'gemini-2.5-flash-lite'
 
 type GeminiPart =
   | { text: string }
