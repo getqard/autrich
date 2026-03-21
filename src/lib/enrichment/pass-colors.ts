@@ -178,9 +178,12 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   // STEP 1: AI Vision (Happy Path)
   // ═══════════════════════════════════════════════════════════
 
-  if (rasterLogo && headerScreenshot) {
+  // Screenshot quality gate: skip AI if screenshot is broken (< 20KB)
+  const screenshotUsable = headerScreenshot && headerScreenshot.length > 20000
+
+  if (rasterLogo && screenshotUsable) {
     try {
-      const aiColors = await pickBrandColors(rasterLogo, headerScreenshot)
+      const aiColors = await pickBrandColors(rasterLogo, headerScreenshot, cssCandidates)
 
       if (aiColors) {
         const bg = aiColors.background
