@@ -10,7 +10,6 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import sharp from 'sharp'
-import type { ColorCandidate } from './types'
 import { hexLuminance, wcagContrastRatio, colorSaturation, hexToHsl, hslToHex, ensurePassSuitable } from './colors'
 
 export type AIColorResult = {
@@ -62,7 +61,6 @@ function validateLabel(rawLabel: string | null, bg: string, adjustments: string[
 export async function pickBrandColors(
   logoBuffer: Buffer,
   websiteScreenshot: Buffer | null,
-  cssCandidates?: ColorCandidate[],
 ): Promise<AIColorResult | null> {
   if (!process.env.ANTHROPIC_API_KEY) {
     console.log('[AI Colors] No ANTHROPIC_API_KEY, skipping')
@@ -84,24 +82,7 @@ export async function pickBrandColors(
       .png()
       .toBuffer()
 
-    console.log(`[AI Colors] Sending to Haiku: screenshot=${(screenshotResized.length / 1024).toFixed(0)}KB logo=${(logoThumbnail.length / 1024).toFixed(0)}KB cssCandidates=${cssCandidates?.length || 0}`)
-
-    // Build CSS color context (optional, helps AI pick real colors)
-    let cssContext = ''
-    if (cssCandidates && cssCandidates.length > 0) {
-      const uniqueColors = [...new Set(cssCandidates.map(c => c.hex.toLowerCase()))]
-      const colorLines = uniqueColors.slice(0, 15).map(hex => {
-        const c = cssCandidates.find(cc => cc.hex.toLowerCase() === hex)!
-        return `  ${hex} (${c.role}, ${c.source})`
-      })
-      cssContext = [
-        '',
-        'CSS-Farben der Website (zur Orientierung):',
-        ...colorLines,
-        '',
-        'Bevorzuge Label-Farben aus dieser Liste wenn möglich.',
-      ].join('\n')
-    }
+    console.log(`[AI Colors] Sending to Haiku: screenshot=${(screenshotResized.length / 1024).toFixed(0)}KB logo=${(logoThumbnail.length / 1024).toFixed(0)}KB`)
 
     const prompt = [
       'Du siehst den Screenshot einer Website und das Logo eines Unternehmens.',
@@ -117,7 +98,6 @@ export async function pickBrandColors(
       '   - Nimm eine echte Farbe die auf der Website vorkommt (Buttons, Akzente, Highlights).',
       '   - KEIN Grau, Weiß, Schwarz oder Creme — muss farbig sein.',
       '   - Muss auf dem Background lesbar sein (guter Kontrast).',
-      cssContext,
       '',
       'Schau dir die Website GENAU an. Welche Farben definieren diese Marke?',
       'Antworte NUR mit JSON: {"background":"#hex","label":"#hex","confidence":0.9}',

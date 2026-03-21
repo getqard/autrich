@@ -182,7 +182,7 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
 
   if (rasterLogo && headerScreenshot) {
     try {
-      const aiColors = await pickBrandColors(rasterLogo, headerScreenshot, cssCandidates)
+      const aiColors = await pickBrandColors(rasterLogo, headerScreenshot)
 
       if (aiColors) {
         const bg = aiColors.background
