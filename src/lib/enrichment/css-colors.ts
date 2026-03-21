@@ -202,7 +202,7 @@ function extractStylesheetUrls(html: string, baseUrl: string): string[] {
  * Fetch external CSS files and return combined CSS text.
  * Fetches top N stylesheets with short timeouts.
  */
-async function fetchExternalCSS(urls: string[], maxFiles: number = 5, maxSizePerFile: number = 200_000): Promise<string> {
+async function fetchExternalCSS(urls: string[], maxFiles: number = 10, maxSizePerFile: number = 200_000): Promise<string> {
   const blocks: string[] = []
 
   const toFetch = urls.slice(0, maxFiles)
@@ -426,61 +426,155 @@ const FRAMEWORK_COLORS = new Set([
 ])
 
 /**
- * Source 1d: ALL background-color declarations in style blocks
- * Simple broad scan — catches things the selector-based approach misses
+ * Source 1d: ALL color declarations in style blocks
+ * Scans: background-color, color, border-color, fill, stroke, gradients
  */
 function extractFromStyleRules(css: string): ColorCandidate[] {
   const candidates: ColorCandidate[] = []
 
-  // Broad scan: find ALL background-color values in CSS
+  // Helper: get selector context for a match position
+  function getSelectorAt(pos: number): string {
+    const before = css.substring(Math.max(0, pos - 400), pos)
+    const selectorMatch = before.match(/([^{}]+)\{[^{}]*$/)
+    return selectorMatch ? selectorMatch[1].trim() : ''
+  }
+
+  function classifySelector(selector: string): { isStructural: boolean; isButton: boolean; isLink: boolean; isHeading: boolean } {
+    return {
+      isStructural: /(?:body|header|nav|footer|\.header|\.navbar|\.site-header|\.main-header|#masthead|#header|\.hero|\.top-bar|\.footer|section)/i.test(selector),
+      isButton: /(?:\.btn|\.button|\.cta|\.wp-block-button|input\[type|submit)/i.test(selector),
+      isLink: /(?:^a\b|\.link|\.nav-link|\.menu.*a\b)/i.test(selector),
+      isHeading: /(?:^h[1-6]\b|\.title|\.heading)/i.test(selector),
+    }
+  }
+
+  let match: RegExpExecArray | null
+
+  // ─── 1. background-color ────────────────────────────────
   const bgColorRegex = /background-color\s*:\s*([^;!}\n]+)/gi
-  let match
   while ((match = bgColorRegex.exec(css)) !== null) {
     const raw = match[1].trim()
-    // Skip var() references — those are handled by CSS var extraction
     if (raw.startsWith('var(')) continue
     const hex = parseCSSColor(raw)
-    if (hex && !isUselessColor(hex)) {
-      // Check context: look backwards to find selector
-      const before = css.substring(Math.max(0, match.index - 300), match.index)
-      const selectorMatch = before.match(/([^{}]+)\{[^{}]*$/)
-      const selector = selectorMatch ? selectorMatch[1].trim() : ''
+    if (!hex || isUselessColor(hex)) continue
 
-      const isStructural = /(?:body|header|nav|footer|\.header|\.navbar|\.site-header|\.main-header|#masthead|#header|\.hero|\.top-bar|\.footer)/i.test(selector)
-      const isButton = /(?:\.btn|\.button|\.cta|a\b|\.wp-block-button)/i.test(selector)
+    const selector = getSelectorAt(match.index)
+    const ctx = classifySelector(selector)
+    const frameworkPenalty = FRAMEWORK_COLORS.has(hex.toLowerCase()) ? 0.6 : 1.0
 
-      // Framework color penalty
-      const frameworkPenalty = FRAMEWORK_COLORS.has(hex.toLowerCase()) ? 0.6 : 1.0
+    if (ctx.isButton) {
+      candidates.push({ hex, role: 'accent', source: `css-rule:${selector.substring(selector.length - 40).trim()}`, confidence: (isNearBlack(hex) ? 0.55 : 0.72) * frameworkPenalty })
+    } else {
+      const conf = ctx.isStructural ? (isNearBlack(hex) ? 0.6 : 0.75) : (isNearBlack(hex) ? 0.5 : 0.58)
+      candidates.push({ hex, role: 'background', source: `css-rule:${selector.substring(selector.length - 40).trim()}`, confidence: conf * frameworkPenalty })
+    }
+  }
 
-      if (isButton) {
-        candidates.push({
-          hex,
-          role: 'accent',
-          source: `css-rule:${selector.substring(selector.length - 40).trim()}`,
-          confidence: (isNearBlack(hex) ? 0.55 : 0.68) * frameworkPenalty,
-        })
-      } else {
-        candidates.push({
-          hex,
-          role: 'background',
-          source: isStructural
-            ? `css-rule:${selector.substring(selector.length - 40).trim()}`
-            : `css-rule:background`,
-          confidence: (isStructural
-            ? (isNearBlack(hex) ? 0.6 : 0.75)
-            : (isNearBlack(hex) ? 0.5 : 0.58)) * frameworkPenalty,
-        })
+  // ─── 2. color: (text color — key for accent detection) ──
+  const colorRegex = /(?:^|;|\{)\s*color\s*:\s*([^;!}\n]+)/gi
+  while ((match = colorRegex.exec(css)) !== null) {
+    const raw = match[1].trim()
+    if (raw.startsWith('var(') || raw.startsWith('inherit')) continue
+    const hex = parseCSSColor(raw)
+    if (!hex || isUselessColor(hex) || isNearBlack(hex)) continue
+    // Skip near-white text colors (boring)
+    if (isNeutralGray(hex)) continue
+
+    const selector = getSelectorAt(match.index)
+    const ctx = classifySelector(selector)
+    const sat = colorSaturation(hex)
+    const frameworkPenalty = FRAMEWORK_COLORS.has(hex.toLowerCase()) ? 0.6 : 1.0
+
+    // Colorful text on buttons/links/headings = strong brand signal
+    if ((ctx.isButton || ctx.isLink) && sat > 0.3) {
+      candidates.push({ hex, role: 'accent', source: `css-color:${selector.substring(selector.length - 40).trim()}`, confidence: 0.75 * frameworkPenalty })
+    } else if (ctx.isHeading && sat > 0.2) {
+      candidates.push({ hex, role: 'accent', source: `css-color:heading`, confidence: 0.65 * frameworkPenalty })
+    } else if (ctx.isStructural && sat > 0.2) {
+      candidates.push({ hex, role: 'text', source: `css-color:structural`, confidence: 0.55 * frameworkPenalty })
+    } else if (sat > 0.4) {
+      // Any highly saturated text color is likely a brand color
+      candidates.push({ hex, role: 'accent', source: `css-color:saturated`, confidence: 0.60 * frameworkPenalty })
+    }
+  }
+
+  // ─── 3. border-color ────────────────────────────────────
+  const borderRegex = /border(?:-(?:top|right|bottom|left))?-color\s*:\s*([^;!}\n]+)/gi
+  while ((match = borderRegex.exec(css)) !== null) {
+    const raw = match[1].trim()
+    if (raw.startsWith('var(')) continue
+    const hex = parseCSSColor(raw)
+    if (!hex || isUselessColor(hex) || isNearBlack(hex) || isNeutralGray(hex)) continue
+    const sat = colorSaturation(hex)
+    if (sat < 0.2) continue
+
+    candidates.push({ hex, role: 'border', source: 'css-border', confidence: 0.55 })
+  }
+
+  // ─── 4. Gradient color stops ────────────────────────────
+  const gradientRegex = /(?:linear|radial)-gradient\s*\(([^)]+)\)/gi
+  while ((match = gradientRegex.exec(css)) !== null) {
+    const gradientBody = match[1]
+    // Extract all color values from gradient stops
+    const colorTokens = gradientBody.match(/#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)|hsla?\([^)]+\)/g)
+    if (colorTokens) {
+      for (const token of colorTokens) {
+        const hex = parseCSSColor(token)
+        if (!hex || isUselessColor(hex) || isNearBlack(hex)) continue
+        const sat = colorSaturation(hex)
+        if (sat < 0.15) continue
+        candidates.push({ hex, role: 'accent', source: 'css-gradient', confidence: 0.62 })
       }
     }
   }
 
-  // Also scan for `color:` on structural elements (text color)
-  const colorRegex = /(?:body|header|nav|\.header|\.site-header|#masthead)\s*[^{]*\{[^}]*?(?:^|;)\s*color\s*:\s*([^;!}\n]+)/gim
-  while ((match = colorRegex.exec(css)) !== null) {
-    const hex = parseCSSColor(match[1].trim())
-    if (hex && !isUselessColor(hex) && !isNearBlack(hex)) {
-      candidates.push({ hex, role: 'text', source: 'css-rule:text', confidence: 0.5 })
+  // ─── 5. SVG fill/stroke ─────────────────────────────────
+  const svgColorRegex = /(?:fill|stroke)\s*:\s*([^;!}\n]+)/gi
+  while ((match = svgColorRegex.exec(css)) !== null) {
+    const raw = match[1].trim()
+    if (raw === 'none' || raw === 'currentColor' || raw.startsWith('url(') || raw.startsWith('var(')) continue
+    const hex = parseCSSColor(raw)
+    if (!hex || isUselessColor(hex) || isNearBlack(hex) || isNeutralGray(hex)) continue
+    const sat = colorSaturation(hex)
+    if (sat < 0.2) continue
+    candidates.push({ hex, role: 'accent', source: 'css-svg-fill', confidence: 0.58 })
+  }
+
+  return candidates
+}
+
+/**
+ * Source 1e: Tailwind arbitrary values + inline hex colors in HTML attributes
+ * Catches: bg-[#hex], text-[#hex], border-[#hex], fill-[#hex], and data-color attributes
+ */
+function extractFromHTMLClasses(html: string): ColorCandidate[] {
+  const candidates: ColorCandidate[] = []
+  const seen = new Set<string>()
+
+  // Tailwind arbitrary values: bg-[#xxx], text-[#xxx], border-[#xxx], fill-[#xxx]
+  const twRegex = /(?:bg|text|border|fill|stroke|accent|ring|outline|decoration)-\[#([0-9a-fA-F]{3,8})\]/g
+  let match
+  while ((match = twRegex.exec(html)) !== null) {
+    const hex = expandShortHex(`#${match[1]}`)
+    if (isUselessColor(hex) || seen.has(hex)) continue
+    seen.add(hex)
+
+    const prefix = match[0].split('-[')[0]
+    const role: ColorCandidate['role'] = prefix === 'bg' ? 'background' : prefix === 'text' ? 'text' : 'accent'
+    const sat = colorSaturation(hex)
+
+    if (sat > 0.1 || role === 'background') {
+      candidates.push({ hex, role, source: `tailwind:${prefix}`, confidence: 0.70 })
     }
+  }
+
+  // data-color, data-bg, data-accent attributes
+  const dataAttrRegex = /data-(?:color|bg|background|accent|brand)=["']([^"']+)["']/gi
+  while ((match = dataAttrRegex.exec(html)) !== null) {
+    const hex = parseCSSColor(match[1])
+    if (!hex || isUselessColor(hex) || seen.has(hex)) continue
+    seen.add(hex)
+    candidates.push({ hex, role: 'accent', source: 'data-attr', confidence: 0.72 })
   }
 
   return candidates
@@ -583,7 +677,7 @@ export async function extractBrandColors(html: string, baseUrl?: string): Promis
     try {
       const sheetUrls = extractStylesheetUrls(html, baseUrl)
       if (sheetUrls.length > 0) {
-        console.log(`[CSS Colors] Fetching ${Math.min(sheetUrls.length, 5)} of ${sheetUrls.length} external stylesheets`)
+        console.log(`[CSS Colors] Fetching ${Math.min(sheetUrls.length, 10)} of ${sheetUrls.length} external stylesheets`)
         externalCSS = await fetchExternalCSS(sheetUrls)
         console.log(`[CSS Colors] External CSS: ${(externalCSS.length / 1024).toFixed(0)}KB`)
       }
@@ -599,6 +693,7 @@ export async function extractBrandColors(html: string, baseUrl?: string): Promis
     ...extractFromMetaTags(html),
     ...extractFromInlineStyles(html),
     ...extractFromStyleRules(css),
+    ...extractFromHTMLClasses(html),
   ]
 
   // Extract header background separately (highest confidence signal)
