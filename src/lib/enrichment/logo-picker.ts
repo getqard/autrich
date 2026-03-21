@@ -1,6 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk'
 import sharp from 'sharp'
 import type { LogoCandidate } from './types'
+
+const VISION_MODEL = 'gemini-2.5-flash'
 
 type PickResult = {
   index: number
@@ -8,16 +9,17 @@ type PickResult = {
 }
 
 /**
- * Use Claude Haiku Vision to pick the best logo from a list of candidates.
+ * Use Gemini 2.5 Flash Vision to pick the best logo from a list of candidates.
  * Sends top 5 candidates as 128px thumbnails → AI picks the real logo.
  *
- * Returns null if no ANTHROPIC_API_KEY, API fail, or < 2 candidates.
+ * Returns null if no GEMINI_API_KEY, API fail, or < 2 candidates.
  */
 export async function pickBestLogo(
   candidates: LogoCandidate[],
   businessName: string
 ): Promise<PickResult | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null
+  const apiKey = process.env.GEMINI_API_KEY
+  if (!apiKey) return null
   if (candidates.length < 2) return null
 
   const top = candidates.slice(0, 5)
@@ -41,23 +43,14 @@ export async function pickBestLogo(
   const validThumbnails = thumbnails.filter((t): t is { index: number; buffer: Buffer } => t !== null)
   if (validThumbnails.length < 2) return null
 
-  const imageContent: Anthropic.ImageBlockParam[] = validThumbnails.map((t) => ({
-    type: 'image' as const,
-    source: {
-      type: 'base64' as const,
-      media_type: 'image/png' as const,
-      data: t.buffer.toString('base64'),
-    },
-  }))
-
-  const contentBlocks: Anthropic.ContentBlockParam[] = []
+  // Build parts: interleave labels + images
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = []
   for (let i = 0; i < validThumbnails.length; i++) {
-    contentBlocks.push({ type: 'text', text: `Bild ${i + 1}:` })
-    contentBlocks.push(imageContent[i])
+    parts.push({ text: `Bild ${i + 1}:` })
+    parts.push({ inlineData: { mimeType: 'image/png', data: validThumbnails[i].buffer.toString('base64') } })
   }
 
-  contentBlocks.push({
-    type: 'text',
+  parts.push({
     text: [
       `Du siehst ${validThumbnails.length} Bilder. Eines davon ist das Hauptlogo des Unternehmens "${businessName}".`,
       `Welches Bild (1-${validThumbnails.length}) ist das Logo? Antworte NUR mit JSON: {"pick": 3, "confidence": 0.95}`,
@@ -70,24 +63,32 @@ export async function pickBestLogo(
   })
 
   try {
-    const client = new Anthropic()
-    const apiAbort = new AbortController()
-    const apiTimeout = setTimeout(() => apiAbort.abort(), 10000)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
 
-    const response = await client.messages.create(
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${VISION_MODEL}:generateContent?key=${apiKey}`,
       {
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 50,
-        messages: [{ role: 'user', content: contentBlocks }],
-      },
-      { signal: apiAbort.signal }
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts }],
+          generationConfig: { maxOutputTokens: 50, temperature: 0.1 },
+        }),
+        signal: controller.signal,
+      }
     )
-    clearTimeout(apiTimeout)
+    clearTimeout(timeout)
 
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map(b => b.text)
-      .join('')
+    if (!res.ok) {
+      const errText = await res.text()
+      throw new Error(`Gemini API ${res.status}: ${errText.substring(0, 200)}`)
+    }
+
+    const response = await res.json()
+    const text = response.candidates?.[0]?.content?.parts
+      ?.map((p: { text: string }) => p.text)
+      .join('') || ''
 
     const jsonMatch = text.match(/\{[^}]+\}/)
     if (!jsonMatch) return null
@@ -106,11 +107,11 @@ export async function pickBestLogo(
     const thumbnailIdx = pick - 1
     const originalIdx = validThumbnails[thumbnailIdx].index
 
-    console.log(`[AI Logo Picker] Chose candidate #${originalIdx + 1} (${top[originalIdx].source}, score ${top[originalIdx].score}) with confidence ${confidence} for "${businessName}"`)
+    console.log(`[AI Logo Picker] Gemini chose candidate #${originalIdx + 1} (${top[originalIdx].source}, score ${top[originalIdx].score}) with confidence ${confidence} for "${businessName}"`)
 
     return { index: originalIdx, confidence }
   } catch (err) {
-    console.error('[AI Logo Picker] Failed (non-fatal):', err instanceof Error ? err.message : err)
+    console.error('[AI Logo Picker] Gemini failed (non-fatal):', err instanceof Error ? err.message : err)
     return null
   }
 }

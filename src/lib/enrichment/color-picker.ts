@@ -8,9 +8,10 @@
  * Cost: ~$0.001-0.002 per call
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import sharp from 'sharp'
 import { hexLuminance, wcagContrastRatio, colorSaturation, hexToHsl, hslToHex, ensurePassSuitable } from './colors'
+
+const VISION_MODEL = 'gemini-2.5-flash'
 
 export type AIColorResult = {
   background: string
@@ -62,8 +63,9 @@ export async function pickBrandColors(
   logoBuffer: Buffer,
   websiteScreenshot: Buffer | null,
 ): Promise<AIColorResult | null> {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.log('[AI Colors] No ANTHROPIC_API_KEY, skipping')
+  const apiKey = process.env.GEMINI_API_KEY
+  if (!apiKey) {
+    console.log('[AI Colors] No GEMINI_API_KEY, skipping')
     return null
   }
   if (!websiteScreenshot || websiteScreenshot.length < 1000) {
@@ -82,7 +84,7 @@ export async function pickBrandColors(
       .png()
       .toBuffer()
 
-    console.log(`[AI Colors] Sending to Haiku: screenshot=${(screenshotResized.length / 1024).toFixed(0)}KB logo=${(logoThumbnail.length / 1024).toFixed(0)}KB`)
+    console.log(`[AI Colors] Sending to Gemini 2.5 Flash: screenshot=${(screenshotResized.length / 1024).toFixed(0)}KB logo=${(logoThumbnail.length / 1024).toFixed(0)}KB`)
 
     const prompt = [
       'Du siehst den Screenshot einer Website und das Logo eines Unternehmens.',
@@ -103,51 +105,39 @@ export async function pickBrandColors(
       'Antworte NUR mit JSON: {"background":"#hex","label":"#hex","confidence":0.9}',
     ].join('\n')
 
-    const client = new Anthropic()
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15000)
 
-    const apiAbort = new AbortController()
-    const apiTimeout = setTimeout(() => apiAbort.abort(), 10000)
-
-    const response = await client.messages.create(
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${VISION_MODEL}:generateContent?key=${apiKey}`,
       {
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 100,
-        messages: [
-          {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
             role: 'user',
-            content: [
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: 'image/png',
-                  data: screenshotResized.toString('base64'),
-                },
-              },
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: 'image/png',
-                  data: logoThumbnail.toString('base64'),
-                },
-              },
-              {
-                type: 'text',
-                text: prompt,
-              },
+            parts: [
+              { inlineData: { mimeType: 'image/png', data: screenshotResized.toString('base64') } },
+              { inlineData: { mimeType: 'image/png', data: logoThumbnail.toString('base64') } },
+              { text: prompt },
             ],
-          },
-        ],
-      },
-      { signal: apiAbort.signal }
+          }],
+          generationConfig: { maxOutputTokens: 100, temperature: 0.2 },
+        }),
+        signal: controller.signal,
+      }
     )
-    clearTimeout(apiTimeout)
+    clearTimeout(timeout)
 
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map(b => b.text)
-      .join('')
+    if (!res.ok) {
+      const errText = await res.text()
+      throw new Error(`Gemini API ${res.status}: ${errText.substring(0, 200)}`)
+    }
+
+    const response = await res.json()
+    const text = response.candidates?.[0]?.content?.parts
+      ?.map((p: { text: string }) => p.text)
+      .join('') || ''
 
     const jsonMatch = text.match(/\{[^}]+\}/)
     if (!jsonMatch) {
