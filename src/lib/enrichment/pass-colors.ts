@@ -1,8 +1,10 @@
 /**
- * Unified Pass Color Determination — AI-First + Waterfall Fallback.
+ * Unified Pass Color Determination — NEW Architecture
  *
- * Happy path: AI Vision picks bg + label → post-processing → done.
- * Fallback: 9-step waterfall (only when AI is unavailable).
+ * Flow:
+ * 1. Screenshot good (>20KB)? → AI Vision with CSS colors as ground truth
+ * 2. Screenshot bad/missing? → Pure CSS-based selection (no hallucination)
+ * 3. After colors chosen → Logo visibility check (separate from color picking)
  *
  * Three colors, all brand-related:
  * - backgroundColor: dark brand color (logo visible on top)
@@ -175,13 +177,13 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   }
 
   // ═══════════════════════════════════════════════════════════
-  // STEP 1: AI Vision (Happy Path)
+  // STEP 1: AI Vision (only with good screenshot + enough CSS data)
   // ═══════════════════════════════════════════════════════════
 
-  // Screenshot quality gate: skip AI if screenshot is broken (< 20KB)
   const screenshotUsable = headerScreenshot && headerScreenshot.length > 20000
+  const hasCSSData = cssCandidates.length >= 3
 
-  if (rasterLogo && screenshotUsable) {
+  if (rasterLogo && screenshotUsable && hasCSSData) {
     try {
       const aiColors = await pickBrandColors(rasterLogo, headerScreenshot, cssCandidates)
 
@@ -189,18 +191,13 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         const bg = aiColors.background
         const textColor = deriveTextColor(bg)
 
-        // Label from AI or fallback derivation
         let labelColor: string
         if (aiColors.label) {
           labelColor = ensureLabelContrast(aiColors.label, bg)
         } else {
-          // AI didn't provide a usable label → derive from BG
-          const bgHsl = hexToHsl(bg)
-          labelColor = hslToHex(bgHsl.h, Math.max(bgHsl.s, 0.3), bgHsl.l < 0.5 ? 0.65 : 0.35)
-          labelColor = ensureLabelContrast(labelColor, bg)
+          labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
         }
 
-        // Ensure label ≠ text
         if (labelColor === textColor) {
           const hsl = hexToHsl(labelColor)
           const bgHsl = hexToHsl(bg)
@@ -223,21 +220,25 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
           logoContrast,
         }
       } else {
-        log('AI Vision returned null → falling back to waterfall')
+        log('AI Vision returned null → falling back to CSS-based')
       }
     } catch (err) {
-      log(`AI Vision ERROR: ${err instanceof Error ? err.message : err} → falling back to waterfall`)
+      log(`AI Vision ERROR: ${err instanceof Error ? err.message : err} → falling back`)
     }
   } else {
-    log(`AI Vision skipped: ${!rasterLogo ? 'no logo' : 'no screenshot'} → using waterfall`)
+    const reasons = []
+    if (!rasterLogo) reasons.push('no logo')
+    if (!screenshotUsable) reasons.push(`screenshot too small (${headerScreenshot?.length || 0}B)`)
+    if (!hasCSSData) reasons.push(`too few CSS candidates (${cssCandidates.length})`)
+    log(`AI Vision skipped: ${reasons.join(', ')} → using CSS-based`)
   }
 
   // ═══════════════════════════════════════════════════════════
-  // FALLBACK: Waterfall (Steps 2-9 + Score-based label)
-  // Only runs when AI is not available
+  // FALLBACK: CSS-Based Selection (no AI, no hallucination)
+  // Uses real colors from the website CSS
   // ═══════════════════════════════════════════════════════════
 
-  return waterfallFallback({
+  return cssFallback({
     rasterLogo,
     cssCandidates,
     headerBackground,
@@ -250,9 +251,41 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   })
 }
 
-// ─── Waterfall Fallback ─────────────────────────────────────
+// ─── Derive label from CSS candidates ────────────────────────
 
-async function waterfallFallback(ctx: {
+function deriveLabelFromCSS(
+  cssCandidates: ColorCandidate[],
+  bg: string,
+  websiteContext: { themeColor: string | null },
+): string {
+  // Find the most saturated CSS color that has good contrast on bg
+  const candidates = cssCandidates
+    .filter(c => {
+      const sat = colorSaturation(c.hex)
+      const wcag = wcagContrastRatio(c.hex, bg)
+      return sat >= 0.15 && wcag >= 2.0 && perceptualDistance(c.hex, bg) > 50
+    })
+    .sort((a, b) => colorSaturation(b.hex) - colorSaturation(a.hex))
+
+  if (candidates.length > 0) {
+    return ensureLabelContrast(candidates[0].hex, bg)
+  }
+
+  // Theme color fallback
+  if (websiteContext.themeColor && colorSaturation(websiteContext.themeColor) >= 0.15) {
+    return ensureLabelContrast(websiteContext.themeColor, bg)
+  }
+
+  // Derive from bg hue
+  const bgHsl = hexToHsl(bg)
+  const targetL = bgHsl.l < 0.5 ? 0.65 : 0.35
+  const derived = hslToHex(bgHsl.h, Math.max(bgHsl.s, 0.25), targetL)
+  return ensureLabelContrast(derived, bg)
+}
+
+// ─── CSS-Based Fallback (replaces old waterfall) ─────────────
+
+async function cssFallback(ctx: {
   rasterLogo: Buffer | null
   cssCandidates: ColorCandidate[]
   headerBackground: string | null
@@ -265,29 +298,26 @@ async function waterfallFallback(ctx: {
 }): Promise<PassColorOutput> {
   const { rasterLogo, cssCandidates, headerBackground, websiteContext, industryDefaults, gmapsPhotoBuffer, logoColor, palette, log } = ctx
 
-  log('Fallback: using waterfall (no AI)')
+  log('CSS-based color selection (no AI)')
 
   let bg: string | null = null
   let accent: string | null = null
   let method = 'fallback'
 
-  // ─── STEP 2: Header Background ────────────────────────────
-  if (!bg && headerBackground) {
+  // ─── STEP 1: Header Background ────────────────────────────
+  if (headerBackground) {
     const logoVisible = !logoColor || perceptualDistance(headerBackground, logoColor.hex) > 130
-    const dist = logoColor ? perceptualDistance(headerBackground, logoColor.hex) : -1
     if (logoVisible) {
       const lum = hexLuminance(headerBackground)
       bg = lum <= 0.45 ? ensurePassSuitable(headerBackground) : darkenHSL(headerBackground, 0.2)
       method = 'header-bg'
-      log(`STEP 2 ✓ Header BG: ${headerBackground} → ${bg} (logoDist=${dist.toFixed(0)})`)
+      log(`STEP 1 ✓ Header BG: ${headerBackground} → ${bg}`)
     } else {
-      log(`STEP 2 ✗ Header BG: ${headerBackground} too close to logo (dist=${dist.toFixed(0)} < 130)`)
+      log(`STEP 1 ✗ Header BG too close to logo`)
     }
-  } else if (!bg) {
-    log(`STEP 2 ✗ Header BG: not found`)
   }
 
-  // ─── STEP 2b: High-confidence CSS brand variable ──────────
+  // ─── STEP 2: High-confidence CSS brand variable ────────────
   if (!bg) {
     const brandVar = cssCandidates
       .filter(c => c.confidence >= 0.9 && c.role === 'background' && hexLuminance(c.hex) <= 0.5)
@@ -295,87 +325,62 @@ async function waterfallFallback(ctx: {
     if (brandVar) {
       bg = ensurePassSuitable(brandVar.hex)
       method = 'css-brand-var'
-      log(`STEP 2b ✓ CSS Brand Variable: ${brandVar.hex} (${brandVar.source}, conf=${brandVar.confidence.toFixed(2)}) → ${bg}`)
-    } else {
-      log(`STEP 2b ✗ No high-confidence dark CSS brand variable`)
+      log(`STEP 2 ✓ CSS Brand: ${brandVar.hex} → ${bg}`)
     }
   }
 
-  // ─── STEP 3: Brand Palette Contrast Selection ─────────────
-  if (!bg && cssCandidates.length > 0 && logoColor) {
-    const bgCandidates: Array<ColorCandidate & { dist: number }> = []
-    const labelCandidates: Array<ColorCandidate & { dist: number }> = []
-
-    for (const c of cssCandidates) {
-      const dist = perceptualDistance(c.hex, logoColor.hex)
-      if (dist > 130) bgCandidates.push({ ...c, dist })
-      else if (dist < 100) labelCandidates.push({ ...c, dist })
-    }
-
-    log(`STEP 3: ${bgCandidates.length} BG candidates (dist>130), ${labelCandidates.length} label candidates (dist<100)`)
-
-    if (bgCandidates.length > 0) {
-      bgCandidates.sort((a, b) => {
+  // ─── STEP 3: Best CSS background with logo contrast ────────
+  if (!bg && cssCandidates.length > 0) {
+    // Sort by: dark colors first, then by confidence
+    const bgOptions = cssCandidates
+      .filter(c => {
+        const lum = hexLuminance(c.hex)
+        return lum <= 0.45 && lum >= 0.02
+      })
+      .sort((a, b) => {
         const confDiff = b.confidence - a.confidence
         if (Math.abs(confDiff) > 0.1) return confDiff
         return hexLuminance(a.hex) - hexLuminance(b.hex)
       })
-      bg = ensurePassSuitable(bgCandidates[0].hex)
-      accent = labelCandidates[0]?.hex ?? null
-      method = 'css-contrast'
-      log(`STEP 3 ✓ CSS Contrast: ${bgCandidates[0].hex} (conf=${bgCandidates[0].confidence.toFixed(2)}) → ${bg}, accent=${accent}`)
-    } else {
-      log(`STEP 3 ✗ No CSS candidates with enough distance to logo`)
+
+    // Pick the one with best logo contrast
+    for (const option of bgOptions) {
+      if (!logoColor || perceptualDistance(option.hex, logoColor.hex) > 100) {
+        bg = ensurePassSuitable(option.hex)
+        method = 'css-best'
+        log(`STEP 3 ✓ CSS Best: ${option.hex} (conf=${option.confidence.toFixed(2)}) → ${bg}`)
+        break
+      }
     }
-  } else if (!bg) {
-    log(`STEP 3 ✗ CSS Contrast: ${cssCandidates.length === 0 ? 'no CSS candidates' : 'no logo color'}`)
+
+    if (!bg && bgOptions.length > 0) {
+      // No good logo contrast, take the best CSS color anyway
+      bg = ensurePassSuitable(bgOptions[0].hex)
+      method = 'css-best'
+      log(`STEP 3 ✓ CSS Best (no logo check): ${bgOptions[0].hex} → ${bg}`)
+    }
   }
 
-  // ─── STEP 4: CSS Direct (no logo color available) ─────────
-  if (!bg && cssCandidates.length > 0) {
-    const eligible = cssCandidates.filter(c => c.role === 'background' && c.confidence >= 0.5 && hexLuminance(c.hex) <= 0.9)
-    const bestCSS = eligible.sort((a, b) => b.confidence - a.confidence)[0]
-    if (bestCSS) {
-      bg = ensurePassSuitable(bestCSS.hex)
-      method = 'css-direct'
-      log(`STEP 4 ✓ CSS Direct: ${bestCSS.hex} (conf=${bestCSS.confidence.toFixed(2)}) → ${bg}`)
-    } else {
-      log(`STEP 4 ✗ CSS Direct: no eligible bg candidates`)
-    }
-  } else if (!bg) {
-    log(`STEP 4 ✗ CSS Direct: no candidates`)
+  // ─── STEP 4: Theme color ────────────────────────────────────
+  if (!bg && websiteContext.themeColor && isValid6Hex(websiteContext.themeColor)) {
+    bg = ensurePassSuitable(websiteContext.themeColor)
+    method = 'theme-color'
+    log(`STEP 4 ✓ Theme color: ${websiteContext.themeColor} → ${bg}`)
   }
 
-  // ─── STEP 5: Logo Color Darkened ──────────────────────────
+  // ─── STEP 5: Logo-derived ──────────────────────────────────
   if (!bg && logoColor && logoColor.saturation >= 0.1) {
     bg = darkenHSL(logoColor.hex, 0.15)
-    method = 'logo-darkened'
-    log(`STEP 5 ✓ Logo Darkened: ${logoColor.hex} → ${bg}`)
-  } else if (!bg) {
-    log(`STEP 5 ✗ Logo Darkened: ${logoColor ? `sat=${logoColor.saturation.toFixed(2)} (< 0.1)` : 'no logo color'}`)
+    method = 'logo-derived'
+    log(`STEP 5 ✓ Logo derived: ${logoColor.hex} → ${bg}`)
   }
 
   // ─── STEP 6: Vibrant Palette ──────────────────────────────
-  if (!bg && palette) {
-    if (!isBoringColor(palette.dominant)) {
-      bg = ensurePassSuitable(palette.dominant)
-      accent = palette.accent
-      method = 'vibrant-palette'
-      log(`STEP 6 ✓ Vibrant Palette: ${palette.dominant} → ${bg}`)
-    } else {
-      const bestSwatch = palette.swatches
-        .filter(s => s.saturation >= 0.15)
-        .sort((a, b) => b.saturation - a.saturation)[0]
-      if (bestSwatch) {
-        bg = ensurePassSuitable(bestSwatch.hex)
-        method = 'vibrant-swatch'
-        log(`STEP 6 ✓ Vibrant Swatch: ${bestSwatch.hex} (sat=${bestSwatch.saturation.toFixed(2)}) → ${bg}`)
-      } else {
-        log(`STEP 6 ✗ Vibrant: dominant boring, no saturated swatches`)
-      }
-    }
-  } else if (!bg) {
-    log(`STEP 6 ✗ Vibrant: no palette`)
+  if (!bg && palette && !isBoringColor(palette.dominant)) {
+    bg = ensurePassSuitable(palette.dominant)
+    accent = palette.accent
+    method = 'vibrant-palette'
+    log(`STEP 6 ✓ Vibrant: ${palette.dominant} → ${bg}`)
   }
 
   // ─── STEP 7: GMaps Photo ──────────────────────────────────
@@ -386,13 +391,9 @@ async function waterfallFallback(ctx: {
         bg = ensurePassSuitable(photoPalette.dominant)
         accent = photoPalette.accent
         method = 'gmaps-photo'
-        log(`STEP 7 ✓ GMaps Photo: ${photoPalette.dominant} → ${bg}`)
-      } else {
-        log(`STEP 7 ✗ GMaps Photo: dominant ${photoPalette.dominant} is boring`)
+        log(`STEP 7 ✓ GMaps: ${photoPalette.dominant} → ${bg}`)
       }
-    } catch { log('STEP 7 ✗ GMaps Photo: extraction failed') }
-  } else if (!bg) {
-    log(`STEP 7 ✗ GMaps Photo: ${gmapsPhotoBuffer ? 'skipped' : 'no buffer'}`)
+    } catch { /* skip */ }
   }
 
   // ─── STEP 8: Industry Default ─────────────────────────────
@@ -400,12 +401,10 @@ async function waterfallFallback(ctx: {
     bg = industryDefaults.default_color
     accent = industryDefaults.default_accent ?? null
     method = 'industry-default'
-    log(`STEP 8 ✓ Industry Default: bg=${bg}, accent=${accent}`)
-  } else if (!bg) {
-    log(`STEP 8 ✗ Industry Default: ${industryDefaults ? 'no default_color' : 'no industry'}`)
+    log(`STEP 8 ✓ Industry: ${bg}`)
   }
 
-  // ─── STEP 9: Fallback ────────────────────────────────────
+  // ─── STEP 9: Ultimate fallback ────────────────────────────
   if (!bg) {
     bg = '#1a1a2e'
     method = 'fallback'
@@ -415,140 +414,37 @@ async function waterfallFallback(ctx: {
   // ═══ TEXT COLOR ══════════════════════════════════════════════
   const textColor = deriveTextColor(bg)
 
-  // ═══ LABEL COLOR (score-based) ═══════════════════════════════
+  // ═══ LABEL COLOR ════════════════════════════════════════════
+  let labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
 
-  const FRAMEWORK_COLORS = new Set([
-    '#007bff', '#0d6efd', '#6c757d', '#28a745', '#198754',
-    '#dc3545', '#ffc107', '#17a2b8', '#0dcaf0', '#5cb85c',
-    '#d9534f', '#f0ad4e', '#5bc0de', '#0075ff',
-  ])
-
-  type LabelCandidate = { hex: string; confidence: number; source: string; role?: string }
-
-  const labelPool: LabelCandidate[] = []
-
-  for (const c of cssCandidates) {
-    if (c.hex.toLowerCase() === bg.toLowerCase()) continue
-    if (perceptualDistance(c.hex, bg) < 30) continue
-    labelPool.push({ hex: c.hex, confidence: c.confidence, source: c.source, role: c.role })
-  }
-
-  if (accent && !labelPool.some(c => c.hex.toLowerCase() === accent!.toLowerCase())) {
-    labelPool.push({ hex: accent, confidence: 0.7, source: 'accent' })
-  }
-
-  if (logoColor && logoColor.saturation >= 0.08) {
-    if (!labelPool.some(c => c.hex.toLowerCase() === logoColor!.hex.toLowerCase())) {
-      labelPool.push({ hex: logoColor.hex, confidence: 0.6, source: 'logo-content' })
+  // If accent was found during bg selection, prefer it
+  if (accent && colorSaturation(accent) >= 0.15) {
+    const contrastOk = wcagContrastRatio(accent, bg) >= 2.5
+    if (contrastOk) {
+      labelColor = ensureLabelContrast(accent, bg)
     }
   }
 
-  // HSL derivation fallback
-  {
-    const bgHsl = hexToHsl(bg)
-    let sourceHsl = bgHsl
-    if (bgHsl.s < 0.1) {
-      const saturatedCandidate = cssCandidates
-        .filter(c => colorSaturation(c.hex) > 0.2)
-        .sort((a, b) => b.confidence - a.confidence)[0]
-      if (saturatedCandidate) {
-        sourceHsl = hexToHsl(saturatedCandidate.hex)
-      } else if (websiteContext.themeColor) {
-        const themeSat = colorSaturation(websiteContext.themeColor)
-        if (themeSat > 0.15) sourceHsl = hexToHsl(websiteContext.themeColor)
-      }
-    }
-    const targetL = bgHsl.l < 0.5 ? 0.6 : 0.35
-    const derived = hslToHex(sourceHsl.h, Math.max(sourceHsl.s, 0.15), targetL)
-    labelPool.push({ hex: derived, confidence: 0.3, source: 'hsl-derived' })
-  }
-
-  // Score candidates
-  function scoreLabelCandidate(hex: string, conf: number, role?: string, source?: string): { total: number; breakdown: string } {
-    const sat = colorSaturation(hex)
-    const wcag = wcagContrastRatio(hex, bg!)
-    const lum = hexLuminance(hex)
-
-    const satScore = sat * 35
-    const confScore = conf * 25
-
-    let clusterCount = 0
-    for (const other of labelPool) {
-      if (other.hex.toLowerCase() === hex.toLowerCase()) continue
-      if (colorSaturation(other.hex) < 0.15) continue
-      if (perceptualDistance(hex, other.hex) < 50) clusterCount++
-    }
-    const clusterNorm = sat >= 0.15 ? Math.min(clusterCount / 3, 1.0) : 0
-    const clusterScore = clusterNorm * 25
-
-    const wcagScore = wcag >= 3.0 ? 15 : (wcag >= 2.5 ? 8 : 0)
-    const roleScore = role === 'accent' ? 10 : (role === 'background' ? -5 : 0)
-
-    let total = satScore + confScore + clusterScore + wcagScore + roleScore
-
-    const isNearWhite = lum > 0.85
-    const isNearBlack = lum < 0.08
-    if (isNearWhite || isNearBlack || sat < 0.1) total -= 15
-    if (FRAMEWORK_COLORS.has(hex.toLowerCase())) total -= 10
-
-    const breakdown = `sat=${sat.toFixed(2)}×35=${satScore.toFixed(0)} conf=${conf.toFixed(2)}×25=${confScore.toFixed(0)} cluster=${clusterCount}→${clusterScore.toFixed(0)} wcag=${wcag.toFixed(1)}→${wcagScore} role=${role ?? '-'}→${roleScore}`
-
-    return { total, breakdown }
-  }
-
-  const scored = labelPool.map(c => {
-    const { total, breakdown } = scoreLabelCandidate(c.hex, c.confidence, c.role, c.source)
-    return { ...c, score: total, breakdown }
-  }).sort((a, b) => b.score - a.score)
-
-  const top3 = scored.slice(0, 3)
-  log(`Label scores (${scored.length} candidates):`)
-  for (const c of top3) {
-    log(`  ${c.hex} score=${c.score.toFixed(0)} [${c.breakdown}] (${c.source})`)
-  }
-
-  let labelColor: string | null = null
-  for (const c of scored) {
-    if (wcagContrastRatio(c.hex, bg) >= 3.0) {
-      labelColor = c.hex
-      log(`Label: picked ${c.hex} (score=${c.score.toFixed(0)}, ${c.source})`)
-      break
-    }
-    const adjusted = ensureLabelContrast(c.hex, bg)
-    if (wcagContrastRatio(adjusted, bg) >= 3.0 && colorSaturation(adjusted) >= 0.15) {
-      labelColor = adjusted
-      log(`Label: adjusted ${c.hex} → ${adjusted} (score=${c.score.toFixed(0)}, ${c.source})`)
-      break
-    }
-  }
-
-  if (!labelColor) {
-    labelColor = mixColors(bg, textColor, 0.35)
-    log(`Label: fallback mix`)
-  }
-
-  labelColor = ensureLabelContrast(labelColor, bg)
-
-  if (labelColor === textColor) {
-    const hsl = hexToHsl(labelColor)
-    const bgHsl = hexToHsl(bg)
-    labelColor = hslToHex(bgHsl.h, Math.max(0.15, bgHsl.s), hsl.l)
-    labelColor = ensureLabelContrast(labelColor, bg)
-  }
-
-  // Fix 6: Saturation guard — if label is gray, derive a colorful one
+  // Saturation guard
   if (colorSaturation(labelColor) < 0.1) {
     const bgHsl = hexToHsl(bg)
     const targetL = bgHsl.l < 0.5 ? 0.65 : 0.35
     labelColor = hslToHex(bgHsl.h, Math.max(bgHsl.s, 0.25), targetL)
     labelColor = ensureLabelContrast(labelColor, bg)
-    log(`Label saturation guard: forced colorful label → ${labelColor}`)
+    log(`Label saturation guard → ${labelColor}`)
+  }
+
+  // Ensure label ≠ text
+  if (labelColor === textColor) {
+    const bgHsl = hexToHsl(bg)
+    const hsl = hexToHsl(labelColor)
+    labelColor = hslToHex(bgHsl.h, Math.max(0.15, bgHsl.s), hsl.l)
+    labelColor = ensureLabelContrast(labelColor, bg)
   }
 
   log(`RESULT: bg=${bg} text=${textColor} label=${labelColor} method=${method}`)
 
-  // ═══ FINAL VALIDATION ══════════════════════════════════════
-
+  // ═══ LOGO CONTRAST CHECK ═══════════════════════════════════
   let logoContrast = checkLogoContrast(bg, logoColor)
 
   if (logoContrast === 'low' && logoColor) {
@@ -587,4 +483,8 @@ async function waterfallFallback(ctx: {
     palette,
     logoContrast,
   }
+}
+
+function isValid6Hex(s: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(s)
 }
