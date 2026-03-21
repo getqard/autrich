@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { geminiText, extractJson } from './gemini'
 import { INDUSTRIES } from '@/data/industries-seed'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import type { ClassifyInput, ClassificationResult } from '@/lib/enrichment/types'
@@ -41,7 +41,7 @@ export function classifyIndustry(
   return null
 }
 
-// ─── Creative Content Generation (AI, for reward/hooks/etc) ─
+// ─── Creative Content Generation (Gemini Flash) ─────────────
 
 export type CreativeContentInput = {
   business_name: string
@@ -125,8 +125,7 @@ function buildCreativePrompt(data: CreativeContentInput): string {
 }
 
 /**
- * Generate creative content (reward, hooks, etc.) using Claude Haiku.
- * Industry is already known — AI only generates the creative parts.
+ * Generate creative content using Gemini Flash (~10x cheaper than Haiku).
  */
 export async function generateCreativeContent(
   data: CreativeContentInput
@@ -134,33 +133,15 @@ export async function generateCreativeContent(
   const start = Date.now()
   const industryData = INDUSTRIES.find(i => i.slug === data.industry)
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return creativeContentFallback(data.industry, data, start)
-  }
-
   try {
-    const anthropic = new Anthropic()
+    const result = await geminiText(
+      CREATIVE_SYSTEM_PROMPT,
+      buildCreativePrompt(data),
+      { maxTokens: 1024, temperature: 0.7 }
+    )
 
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
-      system: CREATIVE_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: buildCreativePrompt(data) }],
-    })
-
-    const text = response.content[0].type === 'text' ? response.content[0].text : ''
-
-    let jsonStr = text.trim()
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/)
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim()
-    }
-
+    const jsonStr = extractJson(result.text)
     const parsed = JSON.parse(jsonStr)
-
-    const tokens_in = response.usage.input_tokens
-    const tokens_out = response.usage.output_tokens
-    const cost_usd = (tokens_in * 0.80 + tokens_out * 4.00) / 1_000_000
 
     return {
       detected_reward: parsed.detected_reward || industryData?.default_reward || '1 Gratis Artikel',
@@ -171,13 +152,13 @@ export async function generateCreativeContent(
       strip_prompt: parsed.strip_prompt || '',
       email_hooks: Array.isArray(parsed.email_hooks) ? parsed.email_hooks : [],
       personalization_notes: parsed.personalization_notes || '',
-      tokens_in,
-      tokens_out,
-      cost_usd,
+      tokens_in: result.tokensIn,
+      tokens_out: result.tokensOut,
+      cost_usd: result.costUsd,
       duration_ms: Date.now() - start,
     }
   } catch (err) {
-    console.error('AI Creative Content generation failed, using fallback:', err)
+    console.error('Gemini Creative Content generation failed, using fallback:', err)
     return creativeContentFallback(data.industry, data, start)
   }
 }
@@ -210,7 +191,7 @@ function creativeContentFallback(
   }
 }
 
-// ─── Full AI Classification (fallback when mapping fails) ───
+// ─── Full AI Classification (Gemini Flash) ──────────────────
 
 const FULL_SYSTEM_PROMPT = `Du bist ein Business-Classifier für lokale Geschäfte in Deutschland.
 Deine Aufgabe: Klassifiziere das Business und generiere Daten für eine digitale Treuekarte.
@@ -276,37 +257,20 @@ function buildUserPrompt(data: ClassifyInput): string {
 
 /**
  * Full AI classification — used ONLY when classifyIndustry() returns null.
+ * Uses Gemini Flash (~10x cheaper than Haiku).
  */
 export async function classifyBusiness(data: ClassifyInput): Promise<ClassificationResult> {
   const start = Date.now()
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return keywordFallback(data, start)
-  }
-
   try {
-    const anthropic = new Anthropic()
+    const result = await geminiText(
+      FULL_SYSTEM_PROMPT,
+      buildUserPrompt(data),
+      { maxTokens: 1024, temperature: 0.5 }
+    )
 
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
-      system: FULL_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: buildUserPrompt(data) }],
-    })
-
-    const text = response.content[0].type === 'text' ? response.content[0].text : ''
-
-    let jsonStr = text.trim()
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/)
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim()
-    }
-
+    const jsonStr = extractJson(result.text)
     const parsed = JSON.parse(jsonStr)
-
-    const tokens_in = response.usage.input_tokens
-    const tokens_out = response.usage.output_tokens
-    const cost_usd = (tokens_in * 0.80 + tokens_out * 4.00) / 1_000_000
 
     return {
       detected_industry: parsed.detected_industry || 'restaurant',
@@ -318,13 +282,13 @@ export async function classifyBusiness(data: ClassifyInput): Promise<Classificat
       strip_prompt: parsed.strip_prompt || '',
       email_hooks: Array.isArray(parsed.email_hooks) ? parsed.email_hooks : [],
       personalization_notes: parsed.personalization_notes || '',
-      tokens_in,
-      tokens_out,
-      cost_usd,
+      tokens_in: result.tokensIn,
+      tokens_out: result.tokensOut,
+      cost_usd: result.costUsd,
       duration_ms: Date.now() - start,
     }
   } catch (err) {
-    console.error('AI Classification failed, using keyword fallback:', err)
+    console.error('Gemini Classification failed, using keyword fallback:', err)
     return keywordFallback(data, start)
   }
 }

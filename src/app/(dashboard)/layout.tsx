@@ -29,12 +29,13 @@ const scrapingItems = [
 ]
 
 const toolItems = [
+  { href: '/tools/pipeline', label: 'Pipeline Runner', phase: '3.5' },
   { href: '/tools/scraper', label: 'Scraper Test', phase: 'B' },
   { href: '/tools/email-finder', label: 'Email Finder', phase: 'D' },
   { href: '/tools/email-verifier', label: 'Email Verifier', phase: 'D' },
   { href: '/tools/logo', label: 'Logo Processor', phase: '3' },
   { href: '/tools/classifier', label: 'AI Classifier', phase: '3' },
-  { href: '/tools/strip', label: 'Strip Image', phase: '4', disabled: true },
+  { href: '/tools/strip', label: 'Strip Image', phase: '4' },
   { href: '/tools/pass', label: 'Pass Generator', phase: '5', disabled: true },
   { href: '/tools/preview', label: 'Preview', phase: '7', disabled: true },
   { href: '/tools/email', label: 'Email Writer', phase: '8', disabled: true },
@@ -108,7 +109,7 @@ export default function DashboardLayout({
         </nav>
         <div className="p-4 border-t border-zinc-800">
           <div className="text-xs text-zinc-600">
-            Phase A — v2 Schema
+            Phase 3.5+4 — Cache + Strip
           </div>
         </div>
       </aside>

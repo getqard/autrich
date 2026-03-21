@@ -26,6 +26,7 @@ export default function LeadDetailPage() {
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [showPalette, setShowPalette] = useState(false)
+  const [franchiseInfo, setFranchiseInfo] = useState<{ isFranchise: boolean; franchiseCount: number; isGeneric: boolean } | null>(null)
 
   const loadLead = useCallback(async () => {
     const res = await fetch(`/api/leads/${id}`)
@@ -34,6 +35,16 @@ export default function LeadDetailPage() {
   }, [id])
 
   useEffect(() => { loadLead() }, [loadLead])
+
+  // Load franchise info when lead email is available
+  useEffect(() => {
+    if (lead?.email) {
+      fetch(`/api/leads/${id}/franchise-info`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data) setFranchiseInfo(data) })
+        .catch(() => {})
+    }
+  }, [lead?.email, id])
 
   async function updatePipeline(status: PipelineStatus) {
     await fetch(`/api/leads/${id}`, {
@@ -82,7 +93,18 @@ export default function LeadDetailPage() {
         <div>
           <h2 className="text-2xl font-bold">{lead.business_name}</h2>
           <p className="text-zinc-400 mt-1">
-            {lead.city || 'Keine Stadt'}{lead.email ? ` · ${lead.email}` : ''}
+            {lead.city || 'Keine Stadt'}
+            {lead.email ? ` · ${lead.email}` : ''}
+            {franchiseInfo?.isFranchise && (
+              <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">
+                Franchise ({franchiseInfo.franchiseCount} Standorte)
+              </span>
+            )}
+            {franchiseInfo?.isGeneric && (
+              <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400">
+                Generic Email
+              </span>
+            )}
             {lead.website_url && (
               <> · <a href={lead.website_url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{lead.website_url}</a></>
             )}

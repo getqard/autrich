@@ -54,25 +54,20 @@ export interface Database {
         Insert: EmailVerifierInsert
         Update: Partial<EmailVerifierInsert>
       }
+      website_scrape_cache: {
+        Row: WebsiteScrapeCache
+        Insert: WebsiteScrapeCacheInsert
+        Update: Partial<WebsiteScrapeCacheInsert>
+      }
+      email_contacts: {
+        Row: EmailContact
+        Insert: EmailContactInsert
+        Update: Partial<EmailContactInsert>
+      }
       strip_templates: {
-        Row: {
-          id: string
-          industry: string
-          color_variant: string
-          image_url: string
-          hex_range_start: string | null
-          hex_range_end: string | null
-          created_at: string
-        }
-        Insert: {
-          id?: string
-          industry: string
-          color_variant: string
-          image_url: string
-          hex_range_start?: string | null
-          hex_range_end?: string | null
-        }
-        Update: Partial<Database['public']['Tables']['strip_templates']['Insert']>
+        Row: StripTemplate
+        Insert: StripTemplateInsert
+        Update: Partial<StripTemplateInsert>
       }
       email_templates: {
         Row: {
@@ -648,6 +643,100 @@ export type LogoSource = 'brandfetch' | 'brandfetch-lettermark' | 'website' | 'g
 export type StripSource = 'template' | 'ai_generated'
 export type EmailStrategy = 'curiosity' | 'social_proof' | 'direct' | 'storytelling' | 'provocation'
 export type DomainWarmupStatus = 'warming' | 'ready' | 'paused' | 'blacklisted'
+
+// ============================================
+// DOMAIN TYPES — Website Scrape Cache
+// ============================================
+
+export type WebsiteScrapeCache = {
+  id: string
+  normalized_domain: string
+  scrape_result: Json
+  logo_storage_path: string | null
+  logo_source: string | null
+  screenshot_storage_path: string | null
+  pass_colors: Json | null
+  http_status: number | null
+  scrape_error: string | null
+  expires_at: string
+  created_at: string
+  updated_at: string
+}
+
+export type WebsiteScrapeCacheInsert = {
+  id?: string
+  normalized_domain: string
+  scrape_result: Json
+  logo_storage_path?: string | null
+  logo_source?: string | null
+  screenshot_storage_path?: string | null
+  pass_colors?: Json | null
+  http_status?: number | null
+  scrape_error?: string | null
+  expires_at?: string
+}
+
+// ============================================
+// DOMAIN TYPES — Email Contacts
+// ============================================
+
+export type EmailContact = {
+  id: string
+  email: string
+  is_franchise_email: boolean
+  franchise_lead_count: number
+  primary_lead_id: string | null
+  last_contacted_at: string | null
+  contact_count: number
+  is_blacklisted: boolean
+  blacklist_reason: string | null
+  is_generic: boolean
+  email_domain: string | null
+  created_at: string
+}
+
+export type EmailContactInsert = {
+  id?: string
+  email: string
+  is_franchise_email?: boolean
+  franchise_lead_count?: number
+  primary_lead_id?: string | null
+  last_contacted_at?: string | null
+  contact_count?: number
+  is_blacklisted?: boolean
+  blacklist_reason?: string | null
+  is_generic?: boolean
+  email_domain?: string | null
+}
+
+// ============================================
+// DOMAIN TYPES — Strip Templates
+// ============================================
+
+export type StripTemplate = {
+  id: string
+  industry: string
+  industry_slug: string | null
+  color_variant: string
+  image_url: string
+  storage_path: string | null
+  hex_range_start: string | null
+  hex_range_end: string | null
+  prompt_used: string | null
+  created_at: string
+}
+
+export type StripTemplateInsert = {
+  id?: string
+  industry: string
+  industry_slug?: string | null
+  color_variant: string
+  image_url: string
+  storage_path?: string | null
+  hex_range_start?: string | null
+  hex_range_end?: string | null
+  prompt_used?: string | null
+}
 export type TrackingEventType =
   | 'email_sent' | 'email_opened' | 'email_clicked'
   | 'page_visited' | 'page_visited_desktop' | 'page_visited_mobile'

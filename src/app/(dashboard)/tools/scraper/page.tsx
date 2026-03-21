@@ -44,6 +44,12 @@ type EnrichmentPreview = {
   passPreview: { bg: string; text: string; label: string; method?: string } | null
 }
 
+type CacheInfo = {
+  hit: boolean
+  cachedAt?: string
+  domain?: string | null
+}
+
 type ScrapeResult = {
   url: string
   finalUrl: string
@@ -61,11 +67,13 @@ type ScrapeResult = {
   websiteType?: 'website' | 'instagram-only' | 'redirect-to-instagram' | 'no-website'
   error?: string
   enrichmentPreview?: EnrichmentPreview
+  _cache?: CacheInfo
 }
 
 export default function ScraperPage() {
   const [url, setUrl] = useState('')
   const [gmapsCategory, setGmapsCategory] = useState('')
+  const [forceRescrape, setForceRescrape] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ScrapeResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -78,8 +86,9 @@ export default function ScraperPage() {
     setError(null)
 
     try {
-      const body: Record<string, string> = { url: url.trim() }
+      const body: Record<string, string | boolean> = { url: url.trim() }
       if (gmapsCategory.trim()) body.gmaps_category = gmapsCategory.trim()
+      if (forceRescrape) body.force = true
 
       // Extract business name from URL for initials fallback
       try {
@@ -150,15 +159,28 @@ export default function ScraperPage() {
             Scrapen
           </button>
         </div>
-        <div>
-          <label className="block text-xs text-zinc-500 mb-1">GMaps Kategorie (optional — für Industry Mapping)</label>
-          <input
-            type="text"
-            value={gmapsCategory}
-            onChange={(e) => setGmapsCategory(e.target.value)}
-            placeholder="z.B. Turkish restaurant, Barber shop, Cafe"
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-sm placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-white/20"
-          />
+        <div className="flex gap-4">
+          <div className="flex-1">
+            <label className="block text-xs text-zinc-500 mb-1">GMaps Kategorie (optional — für Industry Mapping)</label>
+            <input
+              type="text"
+              value={gmapsCategory}
+              onChange={(e) => setGmapsCategory(e.target.value)}
+              placeholder="z.B. Turkish restaurant, Barber shop, Cafe"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-sm placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-white/20"
+            />
+          </div>
+          <div className="flex items-end pb-1">
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-500 hover:text-zinc-300">
+              <input
+                type="checkbox"
+                checked={forceRescrape}
+                onChange={(e) => setForceRescrape(e.target.checked)}
+                className="rounded border-zinc-600 bg-zinc-800"
+              />
+              Force Re-Scrape
+            </label>
+          </div>
         </div>
       </div>
 
@@ -175,6 +197,24 @@ export default function ScraperPage() {
       {/* Results */}
       {result && (
         <div className="space-y-6">
+          {/* Cache Hit Badge */}
+          {result._cache?.hit && (
+            <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4">
+              <div className="flex items-center gap-2 text-blue-400 text-sm">
+                <Clock size={16} />
+                Cache Hit
+                {result._cache.cachedAt && (
+                  <span className="text-blue-300">
+                    (gecached {new Date(result._cache.cachedAt).toLocaleString('de-DE')})
+                  </span>
+                )}
+                {result._cache.domain && (
+                  <span className="text-blue-300/60 font-mono text-xs">{result._cache.domain}</span>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Instagram-only indicator */}
           {(result.websiteType === 'instagram-only' || result.websiteType === 'redirect-to-instagram') && (
             <div className="bg-purple-500/10 border border-purple-500/20 rounded-xl p-4">

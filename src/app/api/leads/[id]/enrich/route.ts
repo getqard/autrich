@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
+import { captureWebsite } from '@/lib/enrichment/screenshot'
 import { processLogo, validateLogoCandidate, fetchGoogleFavicon, generateInitialsLogo } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
-import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGmapsPhoto, cropToSquare } from '@/lib/enrichment/gmaps-photo'
 import { classifyIndustry, classifyBusiness, generateCreativeContent } from '@/lib/ai/classifier'
 import { calculateLeadScore } from '@/lib/enrichment/score'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
+import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
 import { INDUSTRIES } from '@/data/industries-seed'
 
 export async function POST(
@@ -90,21 +91,57 @@ export async function POST(
 
     const industryDefaults = INDUSTRIES.find(i => i.slug === industry)
 
-    // ─── 2. WEBSITE SCRAPE (best effort) ────────────────────
+    // ─── 2. WEBSITE SCRAPE (with cache) ────────────────────
 
-    let scrapeResult = null
+    let scrapeResult: Record<string, unknown> | null = null
+    let headerScreenshot: Buffer | null = null
     if (lead.website_url) {
       try {
-        scrapeResult = await scrapeWebsite(lead.website_url)
+        // Check cache first
+        const cached = await getCachedScrape(lead.website_url)
+        if (cached) {
+          console.log(`[Enrich] Cache hit for ${lead.website_url}`)
+          scrapeResult = cached.scrapeResult
+          headerScreenshot = cached.screenshotBuffer
 
-        updateData.website_description = scrapeResult.description
-        updateData.social_links = scrapeResult.socialLinks
-        updateData.structured_data = scrapeResult.structuredData
-        updateData.has_existing_loyalty = scrapeResult.loyaltyDetected
-        updateData.has_app = scrapeResult.appDetected
+          updateData.website_description = scrapeResult.description
+          updateData.social_links = scrapeResult.socialLinks
+          updateData.structured_data = scrapeResult.structuredData
+          updateData.has_existing_loyalty = scrapeResult.loyaltyDetected
+          updateData.has_app = scrapeResult.appDetected
 
-        if (scrapeResult.socialLinks.instagram) {
-          updateData.instagram_handle = scrapeResult.socialLinks.instagram
+          if ((scrapeResult.socialLinks as Record<string, string>)?.instagram) {
+            updateData.instagram_handle = (scrapeResult.socialLinks as Record<string, string>).instagram
+          }
+        } else {
+          // Fresh scrape
+          console.log(`[Enrich] Fresh scrape for ${lead.website_url}`)
+          const freshResult = await scrapeWebsite(lead.website_url)
+          scrapeResult = freshResult as unknown as Record<string, unknown>
+
+          // Capture screenshot
+          const isInstagramOnly = freshResult.websiteType === 'instagram-only' || freshResult.websiteType === 'redirect-to-instagram'
+          if (!isInstagramOnly) {
+            try {
+              headerScreenshot = await captureWebsite(lead.website_url)
+            } catch { /* non-fatal */ }
+          }
+
+          updateData.website_description = freshResult.description
+          updateData.social_links = freshResult.socialLinks
+          updateData.structured_data = freshResult.structuredData
+          updateData.has_existing_loyalty = freshResult.loyaltyDetected
+          updateData.has_app = freshResult.appDetected
+
+          if (freshResult.socialLinks.instagram) {
+            updateData.instagram_handle = freshResult.socialLinks.instagram
+          }
+
+          // Cache the result for other leads with same domain
+          await setCachedScrape(lead.website_url, {
+            scrapeResult: scrapeResult,
+            screenshotBuffer: headerScreenshot,
+          })
         }
       } catch (err) {
         console.error('Website scrape failed (non-fatal):', err)
@@ -115,42 +152,27 @@ export async function POST(
 
     let logoBuffer: Buffer | null = null
     let logoSource: string = 'generated'
-    const domain = lead.website_url
-      ? new URL(lead.website_url).hostname.replace(/^www\./, '')
-      : null
-
-    // 3a. Brandfetch (but skip lettermarks — they're generic)
-    let brandfetchBuffer: Buffer | null = null
-    let brandfetchSource: string | null = null
-    if (domain) {
+    let domain: string | null = null
+    if (lead.website_url) {
       try {
-        const bf = await fetchBrandfetchLogo(domain)
-        if (bf) {
-          if (bf.source === 'brandfetch-lettermark') {
-            console.log('[Enrich] Brandfetch returned lettermark, skipping')
-          } else {
-            brandfetchBuffer = bf.buffer
-            brandfetchSource = bf.source
-          }
-        }
-      } catch (err) {
-        console.error('Brandfetch failed (non-fatal):', err)
-      }
+        const urlStr = lead.website_url.startsWith('http') ? lead.website_url : `https://${lead.website_url}`
+        domain = new URL(urlStr).hostname.replace(/^www\./, '')
+      } catch { /* invalid URL */ }
     }
 
     // 3b. Website Scraping Logo (with AI Picker)
-    // Prefer website logo if strong signal (score >= 90), otherwise try it when no Brandfetch
-    const hasStrongWebsiteLogo = scrapeResult?.bestLogo && scrapeResult.bestLogo.score >= 90
+    const logoCandidates = scrapeResult?.logoCandidates as Array<{ url: string; score: number; source: string; width: number | null; height: number | null }> | undefined
 
-    if ((hasStrongWebsiteLogo || !brandfetchBuffer) && scrapeResult?.logoCandidates?.length) {
-      const sortedCandidates = [...scrapeResult.logoCandidates]
-        .sort((a: { score: number }, b: { score: number }) => b.score - a.score)
+    if (!logoBuffer && logoCandidates?.length) {
+      const sortedCandidates = [...logoCandidates]
+        .sort((a, b) => b.score - a.score)
 
       // Try AI Logo Picker if we have multiple candidates
       let aiPickedUrl: string | null = null
       if (sortedCandidates.length >= 2) {
         try {
-          const aiPick = await pickBestLogo(sortedCandidates, lead.business_name)
+          // Cast to expected type — cached data may have simplified source strings
+          const aiPick = await pickBestLogo(sortedCandidates as Parameters<typeof pickBestLogo>[0], lead.business_name)
           if (aiPick && aiPick.confidence >= 0.7) {
             const picked = sortedCandidates[aiPick.index]
             const validation = await validateLogoCandidate(picked.url)
@@ -203,13 +225,7 @@ export async function POST(
       }
     }
 
-    // 3b2. Brandfetch real logo as fallback (if website didn't yield a logo)
-    if (!logoBuffer && brandfetchBuffer) {
-      logoBuffer = brandfetchBuffer
-      logoSource = brandfetchSource!
-    }
-
-    // 3b3. Instagram Profilbild (when website + Brandfetch didn't yield a logo)
+    // 3c. Instagram Profilbild
     const igHandle = (updateData.instagram_handle as string) || lead.instagram_handle
     if (!logoBuffer && igHandle) {
       try {
@@ -223,7 +239,7 @@ export async function POST(
       }
     }
 
-    // 3c. GMaps Featured Image
+    // 3d. GMaps Featured Image
     if (!logoBuffer && lead.gmaps_photos?.length > 0) {
       try {
         const photo = await fetchGmapsPhoto(lead.gmaps_photos[0])
@@ -236,7 +252,7 @@ export async function POST(
       }
     }
 
-    // 3d. Google Favicon
+    // 3e. Google Favicon
     if (!logoBuffer && domain) {
       try {
         const fav = await fetchGoogleFavicon(domain)
@@ -249,7 +265,7 @@ export async function POST(
       }
     }
 
-    // 3e. Generated Initials (never fails)
+    // 3f. Generated Initials (never fails)
     if (!logoBuffer) {
       const color = industryDefaults?.default_color || '#1a1a2e'
       logoBuffer = await generateInitialsLogo(lead.business_name, color)
@@ -297,12 +313,13 @@ export async function POST(
 
     const passColors = await determinePassColors({
       logoBuffer,
-      cssCandidates: scrapeResult?.brandColors?.candidates || [],
-      headerBackground: scrapeResult?.brandColors?.headerBackground ?? null,
+      cssCandidates: ((scrapeResult?.brandColors as Record<string, unknown>)?.candidates || []) as Parameters<typeof determinePassColors>[0]['cssCandidates'],
+      headerBackground: (scrapeResult?.brandColors as Record<string, unknown>)?.headerBackground as string ?? null,
+      headerScreenshot,
       websiteContext: {
-        title: scrapeResult?.title ?? lead.business_name,
-        description: scrapeResult?.description ?? lead.website_description,
-        themeColor: scrapeResult?.themeColor ?? null,
+        title: (scrapeResult?.title as string) ?? lead.business_name,
+        description: (scrapeResult?.description as string) ?? lead.website_description,
+        themeColor: (scrapeResult?.themeColor as string) ?? null,
       },
       industrySlug: industry,
       industryDefaults: industryDefaults ?? null,

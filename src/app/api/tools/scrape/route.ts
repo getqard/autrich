@@ -1,24 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { captureWebsite } from '@/lib/enrichment/screenshot'
-import { fetchBrandfetchLogo } from '@/lib/enrichment/brandfetch'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { pickBestLogo } from '@/lib/enrichment/logo-picker'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
+import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
+import { normalizeDomain } from '@/lib/scraping/domain-utils'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import { INDUSTRIES } from '@/data/industries-seed'
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { url, gmaps_category, gmaps_categories, business_name } = body
+    const { url, gmaps_category, gmaps_categories, business_name, force } = body
 
     if (!url || typeof url !== 'string') {
       return NextResponse.json({ error: 'URL ist erforderlich' }, { status: 400 })
     }
 
-    // Scrape website first to detect instagram-only
+    // ─── Cache Check ──────────────────────────────────────────
+    const domain = normalizeDomain(url)
+    let cacheHit = false
+    let cachedAt: string | null = null
+
+    if (!force && domain) {
+      const cached = await getCachedScrape(url)
+      if (cached) {
+        cacheHit = true
+        cachedAt = cached.cachedAt
+
+        // Return cached result with enrichment preview from cache
+        const result = cached.scrapeResult
+        const enrichmentPreview = buildEnrichmentPreviewFromCache(cached, gmaps_category, gmaps_categories)
+
+        return NextResponse.json({
+          ...result,
+          enrichmentPreview,
+          _cache: { hit: true, cachedAt, domain },
+        })
+      }
+    }
+
+    // ─── Fresh Scrape ─────────────────────────────────────────
     const result = await scrapeWebsite(url)
 
     // Skip screenshot for instagram-only URLs
@@ -26,7 +50,6 @@ export async function POST(request: NextRequest) {
     const headerScreenshot = isInstagramOnly ? null : await captureWebsite(url)
 
     // ─── Enrichment Preview ─────────────────────────────────
-
     type EnrichmentLogo = { base64: string; source: string } | null
     type EnrichmentColors = { dominant: string; accent: string | null; textColor: string; labelColor: string; swatches: Array<{ name: string; hex: string; population: number; saturation: number }> } | null
     type EnrichmentIndustry = { slug: string; method: string; gmapsCategory: string | null; emoji: string | null; defaultReward: string | null } | null
@@ -58,8 +81,6 @@ export async function POST(request: NextRequest) {
           logoSource = 'generated'
         }
 
-        // Skip to colors with no CSS candidates
-        const industryDefaults = null
         const passColors = await determinePassColors({
           logoBuffer,
           cssCandidates: [],
@@ -67,7 +88,7 @@ export async function POST(request: NextRequest) {
           headerScreenshot: null,
           websiteContext: { title: null, description: null, themeColor: null },
           industrySlug: null,
-          industryDefaults,
+          industryDefaults: null,
           gmapsPhotoBuffer: null,
         })
 
@@ -83,31 +104,31 @@ export async function POST(request: NextRequest) {
           },
         }
 
-        return NextResponse.json({ ...result, enrichmentPreview })
+        // Cache the result
+        await setCachedScrape(url, {
+          scrapeResult: { ...result, enrichmentPreview },
+          logoBuffer,
+          logoSource,
+          screenshotBuffer: null,
+          passColors: {
+            bg: passColors.backgroundColor,
+            text: passColors.textColor,
+            label: passColors.labelColor,
+            method: passColors.method,
+          },
+        })
+
+        return NextResponse.json({
+          ...result,
+          enrichmentPreview,
+          _cache: { hit: false, domain },
+        })
       }
 
-      // Extract domain
-      const domain = new URL(url).hostname.replace(/^www\./, '')
+      // Normal website flow
 
-      // 1. Brandfetch (lettermarks stored separately as last-resort)
-      let brandfetchBuffer: Buffer | null = null
-      let brandfetchSource: string | null = null
-      let brandfetchLettermarkBuffer: Buffer | null = null
-      const bf = await fetchBrandfetchLogo(domain)
-      if (bf) {
-        if (bf.source === 'brandfetch-lettermark') {
-          console.log('[Scrape] Brandfetch returned lettermark, saving as fallback')
-          brandfetchLettermarkBuffer = bf.buffer
-        } else {
-          brandfetchBuffer = bf.buffer
-          brandfetchSource = bf.source
-        }
-      }
-
-      // 2. Website logo — AI Picker or score-based fallback
-      const hasStrongWebsiteLogo = result.bestLogo && result.bestLogo.score >= 90
-
-      if ((hasStrongWebsiteLogo || !brandfetchBuffer) && result.logoCandidates?.length) {
+      // 1. Website logo (AI Picker or score-based)
+      if (result.logoCandidates?.length) {
         let pickedUrl: string | null = null
 
         if (result.logoCandidates.length >= 2 && business_name) {
@@ -146,17 +167,12 @@ export async function POST(request: NextRequest) {
               })
               clearTimeout(timeout)
               if (!logoRes.ok) throw new Error(`HTTP ${logoRes.status}`)
-              // Fix 3: Skip logos > 5MB
               const contentLength = logoRes.headers.get('content-length')
               if (contentLength && parseInt(contentLength) > 5 * 1024 * 1024) {
-                console.log(`[Scrape] Logo too large (${contentLength}B), skipping`)
                 throw new Error('Logo too large')
               }
               buf = Buffer.from(await logoRes.arrayBuffer())
-              if (buf.length > 5 * 1024 * 1024) {
-                console.log(`[Scrape] Logo too large after download (${buf.length}B), skipping`)
-                throw new Error('Logo too large')
-              }
+              if (buf.length > 5 * 1024 * 1024) throw new Error('Logo too large')
             }
             if (buf.length > 500) {
               logoBuffer = buf
@@ -166,13 +182,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 2b. Brandfetch real logo as fallback
-      if (!logoBuffer && brandfetchBuffer) {
-        logoBuffer = brandfetchBuffer
-        logoSource = brandfetchSource!
-      }
-
-      // 2c. Instagram Profilbild
+      // 2. Instagram Profilbild
       if (!logoBuffer && result.socialLinks?.instagram) {
         try {
           const igBuffer = await fetchInstagramAvatar(result.socialLinks.instagram)
@@ -185,21 +195,15 @@ export async function POST(request: NextRequest) {
 
       // 3. Google Favicon
       if (!logoBuffer) {
-        const fav = await fetchGoogleFavicon(domain)
+        const scrapeDomain = new URL(url.startsWith('http') ? url : `https://${url}`).hostname.replace(/^www\./, '')
+        const fav = await fetchGoogleFavicon(scrapeDomain)
         if (fav) {
           logoBuffer = fav
           logoSource = 'favicon'
         }
       }
 
-      // 4. Brandfetch lettermark (better than generated)
-      if (!logoBuffer && brandfetchLettermarkBuffer) {
-        logoBuffer = brandfetchLettermarkBuffer
-        logoSource = 'brandfetch-lettermark'
-        console.log('[Scrape] Using Brandfetch lettermark as last-resort before generated')
-      }
-
-      // 5. Generated initials
+      // 4. Generated initials
       if (!logoBuffer && business_name) {
         logoBuffer = await generateInitialsLogo(business_name, '#1a1a2e')
         logoSource = 'generated'
@@ -225,11 +229,7 @@ export async function POST(request: NextRequest) {
         ? INDUSTRIES.find(i => i.slug === industry!.slug) ?? null
         : null
 
-      // ─── COLOR DETERMINATION (unified) ────────────────────
-      console.log(`[Scrape Route] brandColors exists=${!!result.brandColors}, candidates=${result.brandColors?.candidates?.length ?? 'undefined'}, headerBG=${result.brandColors?.headerBackground ?? 'undefined'}`)
-      if (result.brandColors?.candidates?.length) {
-        console.log(`[Scrape Route] Candidates:`, result.brandColors.candidates.map(c => `${c.hex} (${c.role}, ${c.source}, conf=${c.confidence.toFixed(2)})`).join(', '))
-      }
+      // ─── COLOR DETERMINATION ────────────────────────────────
       const passColors = await determinePassColors({
         logoBuffer,
         cssCandidates: result.brandColors?.candidates || [],
@@ -256,11 +256,29 @@ export async function POST(request: NextRequest) {
           method: passColors.method,
         },
       }
+
+      // ─── Cache Result ──────────────────────────────────────
+      await setCachedScrape(url, {
+        scrapeResult: { ...result, enrichmentPreview },
+        logoBuffer,
+        logoSource,
+        screenshotBuffer: headerScreenshot,
+        passColors: {
+          bg: passColors.backgroundColor,
+          text: passColors.textColor,
+          label: passColors.labelColor,
+          method: passColors.method,
+        },
+      })
     } catch (err) {
       console.error('Enrichment preview failed (non-fatal):', err)
     }
 
-    return NextResponse.json({ ...result, enrichmentPreview })
+    return NextResponse.json({
+      ...result,
+      enrichmentPreview,
+      _cache: { hit: false, domain },
+    })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Scraping fehlgeschlagen' },
@@ -269,3 +287,44 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// ─── Cache Helper ───────────────────────────────────────────────
+
+function buildEnrichmentPreviewFromCache(
+  cached: { scrapeResult: Record<string, unknown>; logoBuffer: Buffer | null; logoSource: string | null; passColors: Record<string, unknown> | null },
+  gmapsCategory?: string,
+  gmapsCategories?: string[],
+) {
+  // If the cached scrape result already has enrichmentPreview, use it
+  const cachedPreview = cached.scrapeResult.enrichmentPreview as Record<string, unknown> | undefined
+  if (cachedPreview) return cachedPreview
+
+  // Reconstruct from cache data
+  let industry = null
+  if (gmapsCategory || gmapsCategories?.length) {
+    const slug = mapGmapsCategory(gmapsCategory || null, gmapsCategories || [])
+    if (slug) {
+      const ind = INDUSTRIES.find(i => i.slug === slug)
+      industry = {
+        slug,
+        method: 'gmaps',
+        gmapsCategory: gmapsCategory || null,
+        emoji: ind?.emoji ?? null,
+        defaultReward: ind?.default_reward ?? null,
+      }
+    }
+  }
+
+  return {
+    logo: cached.logoBuffer && cached.logoSource
+      ? { base64: cached.logoBuffer.toString('base64'), source: cached.logoSource }
+      : null,
+    colors: null,
+    industry,
+    passPreview: cached.passColors ? {
+      bg: cached.passColors.bg as string,
+      text: cached.passColors.text as string,
+      label: cached.passColors.label as string,
+      method: cached.passColors.method as string,
+    } : null,
+  }
+}
