@@ -193,30 +193,44 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         const bg = aiColors.background
         const textColor = deriveTextColor(bg)
 
+        // Check if website is monochrome (no saturated CSS colors)
+        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2)
+
         let labelColor: string
         if (aiColors.label) {
           // Hallucination guard: check if AI label exists in CSS candidates
-          const aiLabelLower = aiColors.label.toLowerCase()
           const existsInCSS = cssCandidates.some(c => {
-            const dist = perceptualDistance(c.hex, aiLabelLower)
-            return dist < 40 // close enough to a real CSS color
+            const dist = perceptualDistance(c.hex, aiColors.label!)
+            return dist < 40
           })
 
           if (existsInCSS) {
             labelColor = ensureLabelContrast(aiColors.label, bg)
+          } else if (isMonochrome) {
+            // Monochrome website — AI correctly wanted white/gray but it was rejected
+            // Use a warm light gray that contrasts well on dark bg
+            const bgLum = hexLuminance(bg)
+            labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
+            log(`Monochrome website → neutral label ${labelColor}`)
           } else {
             log(`Vision-AI label ${aiColors.label} NOT in CSS → hallucination, using CSS-derived label`)
             labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
           }
         } else {
-          labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+          // AI returned no label (e.g. white was rejected for low saturation)
+          if (isMonochrome) {
+            const bgLum = hexLuminance(bg)
+            labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
+            log(`Monochrome website, no AI label → neutral label ${labelColor}`)
+          } else {
+            labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+          }
         }
 
         if (labelColor === textColor) {
-          const hsl = hexToHsl(labelColor)
-          const bgHsl = hexToHsl(bg)
-          labelColor = hslToHex(bgHsl.h, Math.max(0.15, bgHsl.s), hsl.l)
-          labelColor = ensureLabelContrast(labelColor, bg)
+          // Shift label slightly to differentiate from text
+          const bgLum = hexLuminance(bg)
+          labelColor = bgLum < 0.3 ? '#b0b0b0' : '#505050'
         }
 
         const logoContrast = checkLogoContrast(bg, logoColor)
@@ -488,31 +502,40 @@ async function cssFallback(ctx: {
   const textColor = deriveTextColor(bg)
 
   // ═══ LABEL COLOR ════════════════════════════════════════════
-  let labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+  const isMonochromeCSS = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2)
 
-  // If accent was found during bg selection, prefer it
-  if (accent && colorSaturation(accent) >= 0.15) {
-    const contrastOk = wcagContrastRatio(accent, bg) >= 2.5
-    if (contrastOk) {
-      labelColor = ensureLabelContrast(accent, bg)
+  let labelColor: string
+
+  if (isMonochromeCSS) {
+    // Monochrome website — use neutral gray, don't invent colors
+    const bgLum = hexLuminance(bg)
+    labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
+    log(`Monochrome CSS → neutral label ${labelColor}`)
+  } else {
+    labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+
+    // If accent was found during bg selection, prefer it
+    if (accent && colorSaturation(accent) >= 0.15) {
+      const contrastOk = wcagContrastRatio(accent, bg) >= 2.5
+      if (contrastOk) {
+        labelColor = ensureLabelContrast(accent, bg)
+      }
     }
-  }
 
-  // Saturation guard
-  if (colorSaturation(labelColor) < 0.1) {
-    const bgHsl = hexToHsl(bg)
-    const targetL = bgHsl.l < 0.5 ? 0.65 : 0.35
-    labelColor = hslToHex(bgHsl.h, Math.max(bgHsl.s, 0.25), targetL)
-    labelColor = ensureLabelContrast(labelColor, bg)
-    log(`Label saturation guard → ${labelColor}`)
+    // Saturation guard (only for non-monochrome)
+    if (colorSaturation(labelColor) < 0.1) {
+      const bgHsl = hexToHsl(bg)
+      const targetL = bgHsl.l < 0.5 ? 0.65 : 0.35
+      labelColor = hslToHex(bgHsl.h, Math.max(bgHsl.s, 0.25), targetL)
+      labelColor = ensureLabelContrast(labelColor, bg)
+      log(`Label saturation guard → ${labelColor}`)
+    }
   }
 
   // Ensure label ≠ text
   if (labelColor === textColor) {
-    const bgHsl = hexToHsl(bg)
-    const hsl = hexToHsl(labelColor)
-    labelColor = hslToHex(bgHsl.h, Math.max(0.15, bgHsl.s), hsl.l)
-    labelColor = ensureLabelContrast(labelColor, bg)
+    const bgLum = hexLuminance(bg)
+    labelColor = bgLum < 0.3 ? '#b0b0b0' : '#505050'
   }
 
   log(`RESULT: bg=${bg} text=${textColor} label=${labelColor} method=${method}`)
