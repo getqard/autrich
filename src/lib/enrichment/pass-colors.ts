@@ -1,10 +1,10 @@
 /**
- * Unified Pass Color Determination — NEW Architecture
+ * Unified Pass Color Determination — CSS-First Architecture
  *
  * Flow:
- * 1. Screenshot good (>20KB)? → AI Vision with CSS colors as ground truth
- * 2. Screenshot bad/missing? → Pure CSS-based selection (no hallucination)
- * 3. After colors chosen → Logo visibility check (separate from color picking)
+ * 1. Text-AI picks from CSS candidates (cheapest, no hallucination)
+ * 2. CSS Waterfall fallback (algorithmic, $0)
+ * 3. Screenshot + Vision AI (optional premium, only if CSS fails completely)
  *
  * Three colors, all brand-related:
  * - backgroundColor: dark brand color (logo visible on top)
@@ -14,6 +14,7 @@
 
 import type { ColorCandidate } from './types'
 import type { PaletteResult } from './colors'
+import { pickColorsFromCSS } from './ai-color-picker'
 import { pickBrandColors } from './color-picker'
 import {
   extractLogoContentColor,
@@ -49,6 +50,8 @@ export type PassColorInput = {
   industrySlug: string | null
   industryDefaults: { default_color?: string; default_accent?: string } | null
   gmapsPhotoBuffer: Buffer | null
+  /** If true, uses screenshot + Vision AI as last resort when CSS fails */
+  allowScreenshotFallback?: boolean
 }
 
 export type PassColorOutput = {
@@ -177,65 +180,61 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   }
 
   // ═══════════════════════════════════════════════════════════
-  // STEP 1: AI Vision (only with good screenshot + enough CSS data)
+  // STEP 1: Text-AI picks from CSS candidates (cheapest path)
   // ═══════════════════════════════════════════════════════════
 
-  // Screenshot quality gate: skip AI if screenshot is broken (< 50KB = empty/broken render)
-  const screenshotOk = headerScreenshot && headerScreenshot.length > 50000
+  try {
+    const textAI = await pickColorsFromCSS(
+      cssCandidates,
+      logoColor,
+      websiteContext.title,
+      industrySlug,
+    )
 
-  if (rasterLogo && screenshotOk) {
-    try {
-      const aiColors = await pickBrandColors(rasterLogo, headerScreenshot)
+    if (textAI) {
+      const bg = textAI.backgroundColor
+      const textColor = deriveTextColor(bg)
 
-      if (aiColors) {
-        const bg = aiColors.background
-        const textColor = deriveTextColor(bg)
-
-        let labelColor: string
-        if (aiColors.label) {
-          labelColor = ensureLabelContrast(aiColors.label, bg)
-        } else {
-          labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
-        }
-
-        if (labelColor === textColor) {
-          const hsl = hexToHsl(labelColor)
-          const bgHsl = hexToHsl(bg)
-          labelColor = hslToHex(bgHsl.h, Math.max(0.15, bgHsl.s), hsl.l)
-          labelColor = ensureLabelContrast(labelColor, bg)
-        }
-
-        const logoContrast = checkLogoContrast(bg, logoColor)
-
-        log(`AI-First: bg=${bg} label=${labelColor} text=${textColor} method=ai-vision (confidence=${aiColors.confidence})`)
-
-        return {
-          backgroundColor: bg,
-          accentColor: aiColors.label,
-          textColor,
-          labelColor,
-          method: 'ai-vision',
-          logoContentColor: logoColor,
-          palette,
-          logoContrast,
-        }
+      let labelColor: string
+      if (textAI.labelColor) {
+        labelColor = ensureLabelContrast(textAI.labelColor, bg)
       } else {
-        log('AI Vision returned null → falling back to CSS-based')
+        labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
       }
-    } catch (err) {
-      log(`AI Vision ERROR: ${err instanceof Error ? err.message : err} → falling back`)
+
+      if (labelColor === textColor) {
+        const hsl = hexToHsl(labelColor)
+        const bgHsl = hexToHsl(bg)
+        labelColor = hslToHex(bgHsl.h, Math.max(0.15, bgHsl.s), hsl.l)
+        labelColor = ensureLabelContrast(labelColor, bg)
+      }
+
+      const logoContrast = checkLogoContrast(bg, logoColor)
+
+      log(`Text-AI: bg=${bg} label=${labelColor} text=${textColor} method=text-ai (confidence=${textAI.confidence}, $${textAI.costUsd.toFixed(5)}, reason="${textAI.reasoning}")`)
+
+      return {
+        backgroundColor: bg,
+        accentColor: textAI.labelColor,
+        textColor,
+        labelColor,
+        method: 'text-ai',
+        logoContentColor: logoColor,
+        palette,
+        logoContrast,
+      }
+    } else {
+      log('Text-AI returned null → falling back to CSS waterfall')
     }
-  } else {
-    const reason = !rasterLogo ? 'no logo' : !headerScreenshot ? 'no screenshot' : `screenshot too small (${headerScreenshot.length}B < 50KB)`
-    log(`AI Vision skipped: ${reason} → using CSS-based`)
+  } catch (err) {
+    log(`Text-AI ERROR: ${err instanceof Error ? err.message : err} → falling back`)
   }
 
   // ═══════════════════════════════════════════════════════════
-  // FALLBACK: CSS-Based Selection (no AI, no hallucination)
-  // Uses real colors from the website CSS
+  // STEP 2: CSS-Based Waterfall (no AI, $0)
   // ═══════════════════════════════════════════════════════════
 
-  return cssFallback({
+  const cssResult = await cssFallback({
     rasterLogo,
     cssCandidates,
     headerBackground,
@@ -246,6 +245,52 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
     palette,
     log,
   })
+
+  // ═══════════════════════════════════════════════════════════
+  // STEP 3: Screenshot Vision-AI (optional premium fallback)
+  // Only if CSS result is weak AND screenshot is available
+  // ═══════════════════════════════════════════════════════════
+
+  const cssWeak = cssResult.method === 'fallback' || cssResult.method === 'industry-default'
+  const screenshotOk = headerScreenshot && headerScreenshot.length > 50000
+
+  if (cssWeak && screenshotOk && input.allowScreenshotFallback && rasterLogo) {
+    try {
+      const aiColors = await pickBrandColors(rasterLogo, headerScreenshot)
+      if (aiColors) {
+        const bg = aiColors.background
+        const textColor = deriveTextColor(bg)
+        let labelColor = aiColors.label
+          ? ensureLabelContrast(aiColors.label, bg)
+          : deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+
+        if (labelColor === textColor) {
+          const hsl = hexToHsl(labelColor)
+          const bgHsl = hexToHsl(bg)
+          labelColor = hslToHex(bgHsl.h, Math.max(0.15, bgHsl.s), hsl.l)
+          labelColor = ensureLabelContrast(labelColor, bg)
+        }
+
+        const logoContrast = checkLogoContrast(bg, logoColor)
+        log(`Vision-AI fallback: bg=${bg} label=${labelColor} method=vision-ai-fallback`)
+
+        return {
+          backgroundColor: bg,
+          accentColor: aiColors.label,
+          textColor,
+          labelColor,
+          method: 'vision-ai-fallback',
+          logoContentColor: logoColor,
+          palette,
+          logoContrast,
+        }
+      }
+    } catch (err) {
+      log(`Vision-AI fallback failed: ${err instanceof Error ? err.message : err}`)
+    }
+  }
+
+  return cssResult
 }
 
 // ─── Derive label from CSS candidates ────────────────────────

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { captureWebsite } from '@/lib/enrichment/screenshot'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
-import { pickBestLogo } from '@/lib/enrichment/logo-picker'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
 import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
@@ -127,26 +126,9 @@ export async function POST(request: NextRequest) {
 
       // Normal website flow
 
-      // 1. Website logo (AI Picker or score-based)
+      // 1. Website logo (score-based — bestLogo is the highest-scored candidate)
       if (result.logoCandidates?.length) {
-        let pickedUrl: string | null = null
-
-        if (result.logoCandidates.length >= 2 && business_name) {
-          try {
-            const aiPick = await pickBestLogo(result.logoCandidates, business_name)
-            if (aiPick && aiPick.confidence >= 0.7) {
-              const picked = result.logoCandidates[aiPick.index]
-              const validation = await validateLogoCandidate(picked.url)
-              if (validation.valid) {
-                pickedUrl = picked.url
-              }
-            }
-          } catch { /* non-fatal */ }
-        }
-
-        if (!pickedUrl && result.bestLogo) {
-          pickedUrl = result.bestLogo.url
-        }
+        const pickedUrl = result.bestLogo?.url || null
 
         if (pickedUrl) {
           try {
@@ -243,6 +225,7 @@ export async function POST(request: NextRequest) {
         industrySlug: industry?.slug ?? null,
         industryDefaults,
         gmapsPhotoBuffer: null,
+        allowScreenshotFallback: true, // manual scrape tool = best quality
       })
 
       enrichmentPreview = {

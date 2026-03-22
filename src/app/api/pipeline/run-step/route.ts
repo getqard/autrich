@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { captureWebsite } from '@/lib/enrichment/screenshot'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
-import { pickBestLogo } from '@/lib/enrichment/logo-picker'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
 import { classifyIndustry, classifyBusiness, generateCreativeContent } from '@/lib/ai/classifier'
@@ -126,25 +125,10 @@ async function runLogoStep(url: string, context: Record<string, unknown>, startT
     } catch { /* non-fatal */ }
   }
 
-  // Website logo (AI Picker or score-based)
+  // Website logo (score-based — highest score wins)
   if (!logoBuffer && logoCandidates?.length) {
-    let pickedUrl: string | null = null
-
-    if (logoCandidates.length >= 2) {
-      try {
-        const aiPick = await pickBestLogo(logoCandidates as Parameters<typeof pickBestLogo>[0], businessName)
-        if (aiPick && aiPick.confidence >= 0.7) {
-          const picked = logoCandidates[aiPick.index]
-          const validation = await validateLogoCandidate(picked.url)
-          if (validation.valid) pickedUrl = picked.url
-        }
-      } catch { /* non-fatal */ }
-    }
-
-    if (!pickedUrl) {
-      const sorted = [...logoCandidates].sort((a, b) => b.score - a.score)
-      pickedUrl = sorted[0]?.url || null
-    }
+    const sorted = [...logoCandidates].sort((a, b) => b.score - a.score)
+    const pickedUrl = sorted[0]?.url || null
 
     if (pickedUrl) {
       try {

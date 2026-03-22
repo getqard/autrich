@@ -20,6 +20,12 @@ export type ColorCandidate = {
   role: 'background' | 'accent' | 'text' | 'border'
   source: string
   confidence: number
+  /** Human-readable description for AI context, e.g. "Button background color (.btn-primary)" */
+  context?: string
+  /** CSS selector or HTML element, e.g. "header", ".btn-primary" */
+  element?: string
+  /** CSS property, e.g. "background-color", "--e-global-color-primary" */
+  property?: string
 }
 
 export type PassColorResult = {

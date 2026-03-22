@@ -12,6 +12,9 @@ export type ColorCandidate = {
   role: 'background' | 'accent' | 'text' | 'border'
   source: string
   confidence: number
+  context?: string
+  element?: string
+  property?: string
 }
 
 export type CSSColorResult = {
@@ -251,37 +254,45 @@ function extractFromCSSVars(css: string): ColorCandidate[] {
   const candidates: ColorCandidate[] = []
 
   // High-confidence named patterns (Elementor, Astra, Divi, Squarespace, generic)
-  const namedPatterns: Array<{ regex: RegExp; role: ColorCandidate['role']; label: string; confidence: number }> = [
+  const namedPatterns: Array<{ regex: RegExp; role: ColorCandidate['role']; label: string; confidence: number; context: string }> = [
     // Elementor
-    { regex: /--e-global-color-primary\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'elementor-primary', confidence: 0.95 },
-    { regex: /--e-global-color-secondary\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'elementor-secondary', confidence: 0.9 },
-    { regex: /--e-global-color-accent\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'elementor-accent', confidence: 0.9 },
-    { regex: /--e-global-color-text\s*:\s*([^;}\n]+)/gi, role: 'text', label: 'elementor-text', confidence: 0.85 },
+    { regex: /--e-global-color-primary\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'elementor-primary', confidence: 0.95, context: 'Elementor Hauptfarbe (Primary)' },
+    { regex: /--e-global-color-secondary\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'elementor-secondary', confidence: 0.9, context: 'Elementor Zweitfarbe (Secondary)' },
+    { regex: /--e-global-color-accent\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'elementor-accent', confidence: 0.9, context: 'Elementor Akzentfarbe' },
+    { regex: /--e-global-color-text\s*:\s*([^;}\n]+)/gi, role: 'text', label: 'elementor-text', confidence: 0.85, context: 'Elementor Textfarbe' },
     // Astra
-    { regex: /--ast-global-color-0\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'astra-primary', confidence: 0.93 },
-    { regex: /--ast-global-color-1\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'astra-accent', confidence: 0.9 },
+    { regex: /--ast-global-color-0\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'astra-primary', confidence: 0.93, context: 'Astra Theme Hauptfarbe' },
+    { regex: /--ast-global-color-1\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'astra-accent', confidence: 0.9, context: 'Astra Theme Akzentfarbe' },
     // Divi
-    { regex: /--primary_color\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'divi-primary', confidence: 0.93 },
-    { regex: /--secondary_color\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'divi-secondary', confidence: 0.9 },
+    { regex: /--primary_color\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'divi-primary', confidence: 0.93, context: 'Divi Hauptfarbe' },
+    { regex: /--secondary_color\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'divi-secondary', confidence: 0.9, context: 'Divi Zweitfarbe' },
     // Squarespace
-    { regex: /--primaryButtonColor\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'squarespace-button', confidence: 0.9 },
-    { regex: /--accentColor\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'squarespace-accent', confidence: 0.9 },
-    { regex: /--siteBackgroundColor\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'squarespace-bg', confidence: 0.9 },
+    { regex: /--primaryButtonColor\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'squarespace-button', confidence: 0.9, context: 'Squarespace Button-Farbe' },
+    { regex: /--accentColor\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'squarespace-accent', confidence: 0.9, context: 'Squarespace Akzentfarbe' },
+    { regex: /--siteBackgroundColor\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'squarespace-bg', confidence: 0.9, context: 'Squarespace Seitenhintergrund' },
+    // Shopify
+    { regex: /--color-base-accent-1\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'shopify-accent', confidence: 0.90, context: 'Shopify Akzentfarbe' },
+    { regex: /--color-base-background-1\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'shopify-bg', confidence: 0.88, context: 'Shopify Hintergrundfarbe' },
+    { regex: /--color-base-text\s*:\s*([^;}\n]+)/gi, role: 'text', label: 'shopify-text', confidence: 0.85, context: 'Shopify Textfarbe' },
+    // Webflow
+    { regex: /--swatch[-_]([a-zA-Z0-9-]+)\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'webflow-swatch', confidence: 0.85, context: 'Webflow Farb-Swatch' },
+    // Wix
+    { regex: /--color[-_](\d+)\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'wix-color', confidence: 0.80, context: 'Wix Theme-Farbe' },
     // Generic
-    { regex: /--(?:brand|primary|main)[-_]?color\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'generic-primary', confidence: 0.93 },
-    { regex: /--accent[-_]?color\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'generic-accent', confidence: 0.9 },
-    { regex: /--header[-_]bg\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'generic-header-bg', confidence: 0.88 },
+    { regex: /--(?:brand|primary|main)[-_]?color\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'generic-primary', confidence: 0.93, context: 'CSS-Variable: Marken-Hauptfarbe' },
+    { regex: /--accent[-_]?color\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'generic-accent', confidence: 0.9, context: 'CSS-Variable: Akzentfarbe' },
+    { regex: /--header[-_]bg\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'generic-header-bg', confidence: 0.88, context: 'CSS-Variable: Header-Hintergrund' },
     // WordPress specific
-    { regex: /--wp--preset--color--primary\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'wp-primary', confidence: 0.93 },
-    { regex: /--wp--preset--color--secondary\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'wp-secondary', confidence: 0.9 },
+    { regex: /--wp--preset--color--primary\s*:\s*([^;}\n]+)/gi, role: 'background', label: 'wp-primary', confidence: 0.93, context: 'WordPress Hauptfarbe' },
+    { regex: /--wp--preset--color--secondary\s*:\s*([^;}\n]+)/gi, role: 'accent', label: 'wp-secondary', confidence: 0.9, context: 'WordPress Zweitfarbe' },
   ]
 
-  for (const { regex, role, label, confidence } of namedPatterns) {
+  for (const { regex, role, label, confidence, context } of namedPatterns) {
     let match
     while ((match = regex.exec(css)) !== null) {
       const hex = parseCSSColor(match[1])
       if (hex && !isUselessColor(hex)) {
-        candidates.push({ hex, role, source: `css-var:${label}`, confidence })
+        candidates.push({ hex, role, source: `css-var:${label}`, confidence, context, property: match[0].split(':')[0].trim() })
       }
     }
   }
@@ -462,11 +473,13 @@ function extractFromStyleRules(css: string): ColorCandidate[] {
     const ctx = classifySelector(selector)
     const frameworkPenalty = FRAMEWORK_COLORS.has(hex.toLowerCase()) ? 0.6 : 1.0
 
+    const selectorShort = selector.substring(selector.length - 40).trim()
     if (ctx.isButton) {
-      candidates.push({ hex, role: 'accent', source: `css-rule:${selector.substring(selector.length - 40).trim()}`, confidence: (isNearBlack(hex) ? 0.55 : 0.72) * frameworkPenalty })
+      candidates.push({ hex, role: 'accent', source: `css-rule:${selectorShort}`, confidence: (isNearBlack(hex) ? 0.55 : 0.72) * frameworkPenalty, context: `Button-Hintergrund (${selectorShort})`, element: selectorShort, property: 'background-color' })
     } else {
       const conf = ctx.isStructural ? (isNearBlack(hex) ? 0.6 : 0.75) : (isNearBlack(hex) ? 0.5 : 0.58)
-      candidates.push({ hex, role: 'background', source: `css-rule:${selector.substring(selector.length - 40).trim()}`, confidence: conf * frameworkPenalty })
+      const ctx_str = ctx.isStructural ? `Struktur-Hintergrund (${selectorShort})` : `Hintergrundfarbe (${selectorShort})`
+      candidates.push({ hex, role: 'background', source: `css-rule:${selectorShort}`, confidence: conf * frameworkPenalty, context: ctx_str, element: selectorShort, property: 'background-color' })
     }
   }
 
@@ -485,16 +498,15 @@ function extractFromStyleRules(css: string): ColorCandidate[] {
     const sat = colorSaturation(hex)
     const frameworkPenalty = FRAMEWORK_COLORS.has(hex.toLowerCase()) ? 0.6 : 1.0
 
-    // Colorful text on buttons/links/headings = strong brand signal
+    const selShort = selector.substring(selector.length - 40).trim()
     if ((ctx.isButton || ctx.isLink) && sat > 0.3) {
-      candidates.push({ hex, role: 'accent', source: `css-color:${selector.substring(selector.length - 40).trim()}`, confidence: 0.75 * frameworkPenalty })
+      candidates.push({ hex, role: 'accent', source: `css-color:${selShort}`, confidence: 0.75 * frameworkPenalty, context: `Textfarbe auf Button/Link (${selShort})`, element: selShort, property: 'color' })
     } else if (ctx.isHeading && sat > 0.2) {
-      candidates.push({ hex, role: 'accent', source: `css-color:heading`, confidence: 0.65 * frameworkPenalty })
+      candidates.push({ hex, role: 'accent', source: `css-color:heading`, confidence: 0.65 * frameworkPenalty, context: 'Überschriften-Textfarbe', element: selShort, property: 'color' })
     } else if (ctx.isStructural && sat > 0.2) {
-      candidates.push({ hex, role: 'text', source: `css-color:structural`, confidence: 0.55 * frameworkPenalty })
+      candidates.push({ hex, role: 'text', source: `css-color:structural`, confidence: 0.55 * frameworkPenalty, context: 'Textfarbe in Struktur-Element', element: selShort, property: 'color' })
     } else if (sat > 0.4) {
-      // Any highly saturated text color is likely a brand color
-      candidates.push({ hex, role: 'accent', source: `css-color:saturated`, confidence: 0.60 * frameworkPenalty })
+      candidates.push({ hex, role: 'accent', source: `css-color:saturated`, confidence: 0.60 * frameworkPenalty, context: 'Farbige Textfarbe (hohe Sättigung)', element: selShort, property: 'color' })
     }
   }
 
@@ -576,6 +588,230 @@ function extractFromHTMLClasses(html: string): ColorCandidate[] {
     seen.add(hex)
     candidates.push({ hex, role: 'accent', source: 'data-attr', confidence: 0.72 })
   }
+
+  return candidates
+}
+
+/**
+ * Source 1f: SVG fill/stroke HTML attributes (not CSS)
+ * SVGs in header/nav/logo containers are strong brand signals.
+ */
+function extractFromSVGAttributes(html: string): ColorCandidate[] {
+  const candidates: ColorCandidate[] = []
+  const seen = new Set<string>()
+
+  // Find all fill="..." and stroke="..." attributes in HTML
+  const svgAttrRegex = /(?:fill|stroke)=["']([^"']+)["']/gi
+  let match
+  while ((match = svgAttrRegex.exec(html)) !== null) {
+    const raw = match[1].trim()
+    if (raw === 'none' || raw === 'currentColor' || raw === 'transparent' || raw.startsWith('url(')) continue
+    const hex = parseCSSColor(raw)
+    if (!hex || isUselessColor(hex) || isNearBlack(hex) || isNeutralGray(hex)) continue
+    if (seen.has(hex)) continue
+    seen.add(hex)
+
+    const sat = colorSaturation(hex)
+    if (sat < 0.1) continue
+
+    // Check if SVG is inside a logo/header container
+    const before = html.substring(Math.max(0, match.index - 500), match.index)
+    const isInLogo = /(?:logo|brand|header|nav|masthead)/i.test(before)
+
+    candidates.push({
+      hex,
+      role: 'accent',
+      source: 'svg-attr',
+      confidence: isInLogo ? 0.85 : 0.60,
+      context: isInLogo ? 'SVG-Farbe im Logo/Header-Bereich' : 'SVG-Füllfarbe',
+      element: 'svg',
+      property: match[0].split('=')[0],
+    })
+  }
+
+  return candidates
+}
+
+/**
+ * Source 1g: Framework JSON data embedded in HTML
+ * Extracts colors from __NEXT_DATA__, Wix, Squarespace, Shopify config
+ */
+function extractFromFrameworkJSON(html: string): ColorCandidate[] {
+  const candidates: ColorCandidate[] = []
+  const seen = new Set<string>()
+
+  // ─── Next.js __NEXT_DATA__ ──────────────────────────────
+  const nextDataMatch = html.match(/<script\s+id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i)
+  if (nextDataMatch) {
+    try {
+      const data = JSON.parse(nextDataMatch[1])
+      deepScanForColors(data, 'nextjs', candidates, seen, 8, 15)
+    } catch { /* invalid JSON */ }
+  }
+
+  // ─── Nuxt __NUXT__ ─────────────────────────────────────
+  const nuxtMatch = html.match(/window\.__NUXT__\s*=\s*(\{[\s\S]*?\});?\s*<\/script>/i)
+  if (nuxtMatch) {
+    try {
+      const data = JSON.parse(nuxtMatch[1])
+      deepScanForColors(data, 'nuxt', candidates, seen, 8, 15)
+    } catch { /* invalid JSON */ }
+  }
+
+  // ─── Wix warmup data ───────────────────────────────────
+  const wixMatch = html.match(/<script\s+[^>]*id=["']wix-warmup-data["'][^>]*>([\s\S]*?)<\/script>/i)
+  if (wixMatch) {
+    try {
+      const data = JSON.parse(wixMatch[1])
+      deepScanForColors(data, 'wix', candidates, seen, 8, 20)
+    } catch { /* invalid JSON */ }
+  }
+
+  // ─── Generic JSON in script tags ────────────────────────
+  const scriptJsonRegex = /<script\s+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi
+  let scriptMatch
+  let scriptCount = 0
+  while ((scriptMatch = scriptJsonRegex.exec(html)) !== null && scriptCount < 5) {
+    const body = scriptMatch[1].trim()
+    if (body.length < 10 || body.length > 50000) continue
+    // Skip already-processed framework data
+    if (scriptMatch[0].includes('__NEXT_DATA__') || scriptMatch[0].includes('wix-warmup')) continue
+    try {
+      const data = JSON.parse(body)
+      deepScanForColors(data, 'json-config', candidates, seen, 6, 5)
+      scriptCount++
+    } catch { /* invalid JSON */ }
+  }
+
+  // ─── JS variable assignments with color configs ─────────
+  const configRegex = /(?:var|const|let)\s+\w*(?:config|theme|colors|settings|options)\w*\s*=\s*(\{[^;]{10,2000}\})/gi
+  let configMatch
+  while ((configMatch = configRegex.exec(html)) !== null) {
+    try {
+      const data = JSON.parse(configMatch[1])
+      deepScanForColors(data, 'js-config', candidates, seen, 4, 5)
+    } catch { /* likely not valid JSON */ }
+  }
+
+  return candidates
+}
+
+/**
+ * Recursively scan a JSON object for hex color values.
+ * Key names determine confidence and role.
+ */
+function deepScanForColors(
+  obj: unknown,
+  framework: string,
+  candidates: ColorCandidate[],
+  seen: Set<string>,
+  maxDepth: number,
+  maxResults: number,
+  depth: number = 0,
+  parentKey: string = '',
+): void {
+  if (depth > maxDepth || candidates.length >= maxResults) return
+
+  if (typeof obj === 'string') {
+    // Check if string looks like a hex color
+    const hex = parseCSSColor(obj)
+    if (!hex || isUselessColor(hex) || seen.has(hex)) return
+    seen.add(hex)
+
+    const keyLower = parentKey.toLowerCase()
+    let confidence = 0.60
+    let role: ColorCandidate['role'] = 'accent'
+    let context = `Farbe aus ${framework} JSON-Konfiguration`
+
+    if (/primary|brand|main|haupt/.test(keyLower)) {
+      confidence = 0.88
+      role = 'background'
+      context = `${framework}: Hauptfarbe (${parentKey})`
+    } else if (/accent|secondary|sekundär|highlight/.test(keyLower)) {
+      confidence = 0.85
+      context = `${framework}: Akzentfarbe (${parentKey})`
+    } else if (/background|bg|hintergrund/.test(keyLower)) {
+      confidence = 0.83
+      role = 'background'
+      context = `${framework}: Hintergrundfarbe (${parentKey})`
+    } else if (/button|btn|cta/.test(keyLower)) {
+      confidence = 0.80
+      context = `${framework}: Button-Farbe (${parentKey})`
+    } else if (/header|nav|menu/.test(keyLower)) {
+      confidence = 0.82
+      role = 'background'
+      context = `${framework}: Header/Navigation-Farbe (${parentKey})`
+    } else if (/color|colour|farbe/.test(keyLower)) {
+      confidence = 0.70
+      context = `${framework}: Farbe (${parentKey})`
+    } else {
+      // Not a color-related key — skip
+      return
+    }
+
+    candidates.push({ hex, role, source: `${framework}:${parentKey}`, confidence, context, property: parentKey })
+    return
+  }
+
+  if (Array.isArray(obj)) {
+    for (let i = 0; i < Math.min(obj.length, 20); i++) {
+      deepScanForColors(obj[i], framework, candidates, seen, maxDepth, maxResults, depth + 1, parentKey)
+    }
+    return
+  }
+
+  if (obj && typeof obj === 'object') {
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      deepScanForColors(value, framework, candidates, seen, maxDepth, maxResults, depth + 1, key)
+    }
+  }
+}
+
+/**
+ * Source 1h: manifest.json theme_color and background_color
+ */
+async function extractFromManifest(html: string, baseUrl: string): Promise<ColorCandidate[]> {
+  const candidates: ColorCandidate[] = []
+
+  // Find manifest URL
+  const manifestMatch = html.match(/<link[^>]*rel=["']manifest["'][^>]*href=["']([^"']+)["']/i)
+    || html.match(/<link[^>]*href=["']([^"']+)["'][^>]*rel=["']manifest["']/i)
+  if (!manifestMatch) return candidates
+
+  try {
+    const manifestUrl = new URL(manifestMatch[1], baseUrl).href
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 3000)
+
+    const res = await fetch(manifestUrl, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    })
+    clearTimeout(timeout)
+
+    if (!res.ok) return candidates
+    const manifest = await res.json()
+
+    if (manifest.theme_color) {
+      const hex = parseCSSColor(manifest.theme_color)
+      if (hex && !isUselessColor(hex)) {
+        candidates.push({
+          hex, role: 'background', source: 'manifest:theme_color', confidence: 0.92,
+          context: 'PWA Theme-Farbe aus manifest.json', property: 'theme_color',
+        })
+      }
+    }
+
+    if (manifest.background_color) {
+      const hex = parseCSSColor(manifest.background_color)
+      if (hex && !isUselessColor(hex)) {
+        candidates.push({
+          hex, role: 'background', source: 'manifest:background_color', confidence: 0.80,
+          context: 'PWA Hintergrundfarbe aus manifest.json', property: 'background_color',
+        })
+      }
+    }
+  } catch { /* manifest fetch failed */ }
 
   return candidates
 }
@@ -688,12 +924,18 @@ export async function extractBrandColors(html: string, baseUrl?: string): Promis
 
   const css = inlineCSS + '\n' + externalCSS
 
+  // Fetch manifest colors in parallel with CSS processing
+  const manifestPromise = baseUrl ? extractFromManifest(html, baseUrl) : Promise.resolve([])
+
   const allCandidates: ColorCandidate[] = [
     ...extractFromCSSVars(css),
     ...extractFromMetaTags(html),
     ...extractFromInlineStyles(html),
     ...extractFromStyleRules(css),
     ...extractFromHTMLClasses(html),
+    ...extractFromSVGAttributes(html),
+    ...extractFromFrameworkJSON(html),
+    ...(await manifestPromise),
   ]
 
   // Extract header background separately (highest confidence signal)

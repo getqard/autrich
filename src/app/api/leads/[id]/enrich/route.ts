@@ -3,7 +3,6 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { captureWebsite } from '@/lib/enrichment/screenshot'
 import { processLogo, validateLogoCandidate, fetchGoogleFavicon, generateInitialsLogo } from '@/lib/enrichment/logo'
-import { pickBestLogo } from '@/lib/enrichment/logo-picker'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { fetchGmapsPhoto, cropToSquare } from '@/lib/enrichment/gmaps-photo'
 import { classifyIndustry, classifyBusiness, generateCreativeContent } from '@/lib/ai/classifier'
@@ -167,40 +166,8 @@ export async function POST(
       const sortedCandidates = [...logoCandidates]
         .sort((a, b) => b.score - a.score)
 
-      // Try AI Logo Picker if we have multiple candidates
-      let aiPickedUrl: string | null = null
-      if (sortedCandidates.length >= 2) {
-        try {
-          // Cast to expected type — cached data may have simplified source strings
-          const aiPick = await pickBestLogo(sortedCandidates as Parameters<typeof pickBestLogo>[0], lead.business_name)
-          if (aiPick && aiPick.confidence >= 0.7) {
-            const picked = sortedCandidates[aiPick.index]
-            const validation = await validateLogoCandidate(picked.url)
-            if (validation.valid) {
-              aiPickedUrl = picked.url
-            }
-          }
-        } catch (err) {
-          console.error('AI Logo Picker failed (non-fatal):', err)
-        }
-      }
-
-      // If AI picked a valid logo, use it. Otherwise fall back to score-based.
-      if (aiPickedUrl) {
-        try {
-          const logoResult = await processLogo(aiPickedUrl)
-          const thumbnailVariant = logoResult.variants.find(v => v.name === 'thumbnail')
-          if (thumbnailVariant) {
-            logoBuffer = thumbnailVariant.buffer
-            logoSource = 'website'
-          }
-        } catch (err) {
-          console.error('AI-picked logo processing failed (non-fatal):', err)
-        }
-      }
-
-      // Score-based fallback
-      if (!logoBuffer) {
+      // Score-based logo selection (top 3 candidates, validate each)
+      {
         const topCandidates = sortedCandidates.slice(0, 3)
         const validations = await Promise.all(
           topCandidates.map(async (c: { url: string }) => ({
