@@ -238,6 +238,7 @@ export async function POST(request: NextRequest) {
             passColors.backgroundColor,
             result.logoCandidates,
             result.bestLogo?.url || null,
+            business_name || result.title || undefined,
           )
 
           if (visCheck.newLogoBuffer) {

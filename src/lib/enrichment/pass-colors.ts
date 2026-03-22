@@ -199,10 +199,12 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
 
         let labelColor: string
         if (aiColors.label) {
-          // Hallucination guard: check if AI label exists in CSS candidates
+          // Hallucination guard: check if AI label is close to any CSS candidate
+          // Higher confidence = more lenient (AI is more sure about what it sees)
+          const maxDist = aiColors.confidence >= 0.85 ? 80 : 60
           const existsInCSS = cssCandidates.some(c => {
             const dist = perceptualDistance(c.hex, aiColors.label!)
-            return dist < 40
+            return dist < maxDist
           })
 
           if (existsInCSS) {

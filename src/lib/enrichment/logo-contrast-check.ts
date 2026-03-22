@@ -2,30 +2,33 @@
  * Logo Contrast Check — post-color-selection validation
  *
  * After colors are chosen, checks if the logo is actually visible on the background.
- * If not, tries to find an alternative logo variant (light/dark) from candidates.
- * If no alternative, adjusts the background color.
+ * If not:
+ *   1. Scans logo candidates for a better variant (pixel analysis, $0)
+ *   2. If no variant found → AI picks best logo for the background (Haiku, ~$0.001)
+ *   3. If AI fails → adjusts the background color
  *
- * Zero AI cost — pure pixel analysis with Sharp.
+ * Filters out third-party logos (Google, Facebook, etc.)
  */
 
+import Anthropic from '@anthropic-ai/sdk'
 import sharp from 'sharp'
 
+// Third-party logos that should never be picked as the business logo
+const THIRD_PARTY_PATTERNS = [
+  'google', 'facebook', 'instagram', 'twitter', 'tiktok', 'youtube',
+  'yelp', 'tripadvisor', 'whatsapp', 'telegram', 'pinterest',
+  'linkedin', 'paypal', 'stripe', 'plugin', 'widget', 'review',
+  'trustpilot', 'capterra', 'g2crowd',
+]
+
 type ContrastCheckResult = {
-  /** Whether the current logo is visible on the bg */
   logoVisible: boolean
-  /** Contrast ratio between logo content and bg (1 = identical, 21 = max) */
   contrastRatio: number
-  /** If a better logo variant was found: the new logo buffer */
   newLogoBuffer?: Buffer
-  /** Source of the new logo (e.g. "header-logo-light") */
   newLogoSource?: string
-  /** If bg was adjusted to improve visibility */
   adjustedBg?: string
 }
 
-/**
- * Analyze the average luminance of a logo image (non-transparent, non-white pixels).
- */
 async function getLogoLuminance(buffer: Buffer): Promise<number> {
   try {
     const { data } = await sharp(buffer)
@@ -39,9 +42,9 @@ async function getLogoLuminance(buffer: Buffer): Promise<number> {
 
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3]
-      if (a < 128) continue // skip transparent
+      if (a < 128) continue
       const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-      if (lum > 0.95) continue // skip white background
+      if (lum > 0.95) continue
       totalLum += lum
       count++
     }
@@ -52,37 +55,31 @@ async function getLogoLuminance(buffer: Buffer): Promise<number> {
   }
 }
 
-/**
- * Calculate contrast ratio between two luminance values (WCAG formula).
- */
 function contrastRatio(lum1: number, lum2: number): number {
   const lighter = Math.max(lum1, lum2)
   const darker = Math.min(lum1, lum2)
   return (lighter + 0.05) / (darker + 0.05)
 }
 
-/**
- * Get luminance from a hex color.
- */
 function hexToLuminance(hex: string): number {
   const h = hex.replace('#', '')
   const r = parseInt(h.substring(0, 2), 16) / 255
   const g = parseInt(h.substring(2, 4), 16) / 255
   const b = parseInt(h.substring(4, 6), 16) / 255
-
   const toLinear = (c: number) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
   return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b)
 }
 
-/**
- * Fetch an image buffer from URL with timeout.
- */
+function isThirdPartyLogo(url: string): boolean {
+  const lower = url.toLowerCase()
+  return THIRD_PARTY_PATTERNS.some(p => lower.includes(p))
+}
+
 async function fetchImage(url: string): Promise<Buffer | null> {
   try {
     if (url.startsWith('data:')) {
       const commaIdx = url.indexOf(',')
-      if (commaIdx === -1) return null
-      if (url.length > 2 * 1024 * 1024) return null
+      if (commaIdx === -1 || url.length > 2 * 1024 * 1024) return null
       const header = url.substring(0, commaIdx).toLowerCase()
       const data = url.substring(commaIdx + 1)
       return header.includes('base64')
@@ -107,20 +104,17 @@ async function fetchImage(url: string): Promise<Buffer | null> {
 
 /**
  * Check if the current logo is visible on the chosen background.
- * If not, scan logo candidates for a better variant.
- * If no better variant exists, suggest a bg adjustment.
- *
- * @param logoBuffer - Current logo image
- * @param bgHex - Chosen background color
- * @param logoCandidates - All available logo candidates (URL + score)
- * @param currentLogoUrl - URL of the currently selected logo (to skip in scan)
- * @param minContrast - Minimum acceptable contrast ratio (default 2.0)
+ * If not:
+ *   1. Scan candidates for a better variant (pixel check, $0)
+ *   2. Ask AI to pick best logo for this background (~$0.001)
+ *   3. Adjust background color as last resort
  */
 export async function checkLogoVisibility(
   logoBuffer: Buffer,
   bgHex: string,
   logoCandidates: Array<{ url: string; score: number; source: string }>,
   currentLogoUrl: string | null,
+  businessName?: string,
   minContrast: number = 2.0,
 ): Promise<ContrastCheckResult> {
   const bgLum = hexToLuminance(bgHex)
@@ -136,25 +130,19 @@ export async function checkLogoVisibility(
 
   console.log(`[Logo Contrast] ✗ Logo NOT visible (ratio ${ratio.toFixed(1)} < ${minContrast}) → scanning alternatives...`)
 
-  // ─── Try alternative logo candidates ────────────────────
-
-  // Filter candidates to ONLY logo-like images (not photos, og-images, etc.)
-  const logoSources = new Set(['header-logo', 'link-icon', 'apple-touch-icon', 'inline-svg', 'manifest-icon', 'favicon'])
+  // ─── Step 1: Pixel-based scan for better variant ($0) ────
 
   const alternatives = logoCandidates
     .filter(c => {
       if (c.url === currentLogoUrl) return false
-      if (c.score < 50) return false
-      if (!logoSources.has(c.source)) return false
-      // Skip likely photos: check if URL contains photo/image keywords
+      if (c.score < 40) return false
+      if (isThirdPartyLogo(c.url)) return false
       const urlLower = c.url.toLowerCase()
-      if (/\b(photo|dsc|img_\d|image\/width=\d{3,}.*height=\d{3,}|preview)\b/.test(urlLower)) return false
-      // Skip empty SVG placeholders (data URIs that are too small)
+      if (/\b(photo|dsc|img_\d|preview)\b/.test(urlLower)) return false
       if (c.url.startsWith('data:') && c.url.length < 500) return false
       return true
     })
     .sort((a, b) => {
-      // Prefer candidates with "logo" in URL
       const aHasLogo = a.url.toLowerCase().includes('logo') ? 1 : 0
       const bHasLogo = b.url.toLowerCase().includes('logo') ? 1 : 0
       if (aHasLogo !== bHasLogo) return bHasLogo - aHasLogo
@@ -167,17 +155,13 @@ export async function checkLogoVisibility(
       const buf = await fetchImage(candidate.url)
       if (!buf) continue
 
-      // Quick check: reject images that are too wide (photos are often 16:9+)
       try {
         const meta = await sharp(buf).metadata()
         if (meta.width && meta.height) {
           const aspect = meta.width / meta.height
-          if (aspect > 2.5 || aspect < 0.3) {
-            console.log(`[Logo Contrast] Skipping ${candidate.source}: aspect ${aspect.toFixed(1)} (too wide/tall for logo)`)
-            continue
-          }
+          if (aspect > 2.5 || aspect < 0.3) continue
         }
-      } catch { /* can't read metadata, try anyway */ }
+      } catch { /* skip metadata check */ }
 
       const altLum = await getLogoLuminance(buf)
       const altRatio = contrastRatio(altLum, bgLum)
@@ -198,24 +182,44 @@ export async function checkLogoVisibility(
     }
   }
 
-  // ─── No better variant — adjust background ─────────────
+  // ─── Step 2: AI picks best logo for this background ──────
 
-  console.log(`[Logo Contrast] No better logo variant found → adjusting background`)
+  console.log(`[Logo Contrast] No pixel-based match → asking AI to pick best logo...`)
 
-  // If logo is dark → lighten bg. If logo is light → darken bg.
+  const aiResult = await aiPickLogoForBackground(
+    logoCandidates.filter(c => !isThirdPartyLogo(c.url) && c.score >= 40),
+    bgHex,
+    businessName,
+  )
+
+  if (aiResult) {
+    const aiRatio = contrastRatio(await getLogoLuminance(aiResult.buffer), bgLum)
+    if (aiRatio > ratio) {
+      console.log(`[Logo Contrast] ✓ AI picked better logo: ${aiResult.source} (ratio ${aiRatio.toFixed(1)})`)
+      return {
+        logoVisible: aiRatio >= minContrast,
+        contrastRatio: aiRatio,
+        newLogoBuffer: aiResult.buffer,
+        newLogoSource: aiResult.source,
+      }
+    }
+  }
+
+  // ─── Step 3: Adjust background ────────────────────────────
+
+  console.log(`[Logo Contrast] No better logo found → adjusting background`)
+
   const h = bgHex.replace('#', '')
   let r = parseInt(h.substring(0, 2), 16)
   let g = parseInt(h.substring(2, 4), 16)
   let b = parseInt(h.substring(4, 6), 16)
 
   if (logoLum < 0.3) {
-    // Dark logo → lighten bg (but keep it brand-related by scaling, not adding white)
     const factor = 1.8
     r = Math.min(255, Math.round(r * factor + 30))
     g = Math.min(255, Math.round(g * factor + 30))
     b = Math.min(255, Math.round(b * factor + 30))
   } else {
-    // Light logo → darken bg
     const factor = 0.4
     r = Math.round(r * factor)
     g = Math.round(g * factor)
@@ -231,5 +235,103 @@ export async function checkLogoVisibility(
     logoVisible: newRatio >= minContrast,
     contrastRatio: newRatio,
     adjustedBg,
+  }
+}
+
+// ─── AI Logo Picker for Background ──────────────────────────
+
+async function aiPickLogoForBackground(
+  candidates: Array<{ url: string; score: number; source: string }>,
+  bgHex: string,
+  businessName?: string,
+): Promise<{ buffer: Buffer; source: string } | null> {
+  if (!process.env.ANTHROPIC_API_KEY) return null
+  if (candidates.length < 2) return null
+
+  const top = candidates.slice(0, 5)
+
+  // Download + resize thumbnails
+  const thumbnails = await Promise.all(
+    top.map(async (c, i) => {
+      try {
+        const buf = await fetchImage(c.url)
+        if (!buf) return null
+        const thumb = await sharp(buf)
+          .resize(128, 128, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
+          .png()
+          .toBuffer()
+        return { index: i, buffer: buf, thumb }
+      } catch {
+        return null
+      }
+    })
+  )
+
+  const valid = thumbnails.filter((t): t is { index: number; buffer: Buffer; thumb: Buffer } => t !== null)
+  if (valid.length < 2) return null
+
+  // Build vision message
+  const contentBlocks: Anthropic.ContentBlockParam[] = []
+  for (let i = 0; i < valid.length; i++) {
+    contentBlocks.push({ type: 'text', text: `Logo ${i + 1}:` })
+    contentBlocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: valid[i].thumb.toString('base64') },
+    })
+  }
+
+  const bgIsDark = hexToLuminance(bgHex) < 0.2
+  contentBlocks.push({
+    type: 'text',
+    text: [
+      businessName ? `Unternehmen: "${businessName}"` : '',
+      `Der Pass-Hintergrund ist ${bgIsDark ? 'DUNKEL' : 'HELL'} (${bgHex}).`,
+      `Welches Logo (1-${valid.length}) ist das echte Logo des Unternehmens UND wäre auf dem ${bgIsDark ? 'dunklen' : 'hellen'} Hintergrund am besten SICHTBAR?`,
+      '',
+      'Regeln:',
+      '- Wähle das echte Unternehmens-Logo, NICHT Google/Facebook/Social Media Icons',
+      bgIsDark ? '- Bevorzuge HELLE Logo-Varianten (weiß, hell) für den dunklen Hintergrund' : '- Bevorzuge DUNKLE Logo-Varianten für den hellen Hintergrund',
+      '- Wenn keins passt: {"pick": 0}',
+      '',
+      'Antworte NUR mit JSON: {"pick": 2, "confidence": 0.9}',
+    ].filter(Boolean).join('\n'),
+  })
+
+  try {
+    const client = new Anthropic()
+    const apiAbort = new AbortController()
+    const apiTimeout = setTimeout(() => apiAbort.abort(), 10000)
+
+    const response = await client.messages.create(
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 50,
+        messages: [{ role: 'user', content: contentBlocks }],
+      },
+      { signal: apiAbort.signal }
+    )
+    clearTimeout(apiTimeout)
+
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('')
+
+    const jsonMatch = text.match(/\{[^}]+\}/)
+    if (!jsonMatch) return null
+
+    const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>
+    const pick = typeof parsed.pick === 'number' ? parsed.pick : 0
+    if (pick < 1 || pick > valid.length) return null
+
+    const chosen = valid[pick - 1]
+    const source = top[chosen.index].source
+
+    console.log(`[Logo Contrast AI] Haiku picked logo ${pick}: ${source} (${top[chosen.index].url.substring(0, 60)}...)`)
+
+    return { buffer: chosen.buffer, source }
+  } catch (err) {
+    console.error('[Logo Contrast AI] Failed (non-fatal):', err instanceof Error ? err.message : err)
+    return null
   }
 }
