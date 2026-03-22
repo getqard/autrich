@@ -183,9 +183,21 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   // STEP 1: Text-AI picks from CSS candidates (cheapest path)
   // ═══════════════════════════════════════════════════════════
 
+  // Enrich CSS candidates with logo palette colors as ACCENT candidates only
+  // (NOT as background — logo colors as BG would make the logo invisible)
+  const enrichedCandidates = [...cssCandidates]
+  if (palette) {
+    if (palette.dominant && !isBoringColor(palette.dominant)) {
+      enrichedCandidates.push({ hex: palette.dominant, role: 'accent', source: 'logo-palette:dominant', confidence: 0.85, context: 'Markenfarbe aus dem Logo — NUR als Akzent verwenden, NICHT als Background' })
+    }
+    if (palette.accent && !isBoringColor(palette.accent) && palette.accent !== palette.dominant) {
+      enrichedCandidates.push({ hex: palette.accent, role: 'accent', source: 'logo-palette:accent', confidence: 0.82, context: 'Zweitfarbe aus dem Logo — NUR als Akzent verwenden' })
+    }
+  }
+
   try {
     const textAI = await pickColorsFromCSS(
-      cssCandidates,
+      enrichedCandidates,
       logoColor,
       websiteContext.title,
       industrySlug,
