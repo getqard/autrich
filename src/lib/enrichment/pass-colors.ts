@@ -193,8 +193,9 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         const bg = aiColors.background
         const textColor = deriveTextColor(bg)
 
-        // Check if website is monochrome (no saturated CSS colors)
-        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2)
+        // Check if website is monochrome — only count high-confidence saturated colors as evidence
+        // Low-confidence colors (< 0.70) are often framework noise, not brand colors
+        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2 && c.confidence >= 0.70)
 
         let labelColor: string
         if (aiColors.label) {
@@ -502,7 +503,7 @@ async function cssFallback(ctx: {
   const textColor = deriveTextColor(bg)
 
   // ═══ LABEL COLOR ════════════════════════════════════════════
-  const isMonochromeCSS = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2)
+  const isMonochromeCSS = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2 && c.confidence >= 0.70)
 
   let labelColor: string
 
