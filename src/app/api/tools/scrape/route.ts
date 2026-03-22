@@ -4,6 +4,7 @@ import { captureWebsite } from '@/lib/enrichment/screenshot'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
+import { checkLogoVisibility } from '@/lib/enrichment/logo-contrast-check'
 import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
 import { normalizeDomain } from '@/lib/scraping/domain-utils'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
@@ -227,6 +228,32 @@ export async function POST(request: NextRequest) {
         gmapsPhotoBuffer: null,
         allowScreenshotFallback: true, // manual scrape tool = best quality
       })
+
+      // ─── LOGO VISIBILITY CHECK ──────────────────────────────
+      // Check if logo is visible on chosen bg — swap variant or adjust bg if not
+      if (logoBuffer && result.logoCandidates?.length > 1) {
+        try {
+          const visCheck = await checkLogoVisibility(
+            logoBuffer,
+            passColors.backgroundColor,
+            result.logoCandidates,
+            result.bestLogo?.url || null,
+          )
+
+          if (visCheck.newLogoBuffer) {
+            // Found a better logo variant with good contrast
+            logoBuffer = visCheck.newLogoBuffer
+            logoSource = visCheck.newLogoSource || logoSource
+            console.log(`[Scrape] Logo swapped for better contrast: ${visCheck.newLogoSource}`)
+          } else if (visCheck.adjustedBg) {
+            // No better variant — bg was adjusted
+            passColors.backgroundColor = visCheck.adjustedBg
+            console.log(`[Scrape] BG adjusted for logo visibility: ${visCheck.adjustedBg}`)
+          }
+        } catch (err) {
+          console.error('Logo contrast check failed (non-fatal):', err)
+        }
+      }
 
       enrichmentPreview = {
         logo: logoBuffer && logoSource ? { base64: logoBuffer.toString('base64'), source: logoSource } : null,
