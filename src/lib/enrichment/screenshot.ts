@@ -25,12 +25,12 @@ export async function captureWebsite(url: string): Promise<Buffer | null> {
     return captureWithScreenshotOne(token, url)
   }
 
-  // Try desktop first
+  // Try desktop first (networkidle waits for all requests to finish, no extra delay needed)
   const desktop = await takeScreenshotAPI(token, url, {
     width: '1440',
     height: '900',
-    delay: '5000',
-    wait_for_event: 'load',
+    delay: '2000',
+    wait_for_event: 'networkidle',
   })
 
   if (desktop && desktop.length > 50000) {
@@ -44,7 +44,7 @@ export async function captureWebsite(url: string): Promise<Buffer | null> {
   const mobile = await takeScreenshotAPI(token, url, {
     width: '390',
     height: '844',
-    delay: '7000',
+    delay: '3000',
     wait_for_event: 'networkidle',
     retina: 'true',
   })
@@ -60,7 +60,7 @@ export async function captureWebsite(url: string): Promise<Buffer | null> {
   const noBlock = await takeScreenshotAPI(token, url, {
     width: '1440',
     height: '900',
-    delay: '8000',
+    delay: '3000',
     wait_for_event: 'networkidle',
     no_cookie_banners: 'false',
     block_ads: 'false',
@@ -102,7 +102,7 @@ async function takeScreenshotAPI(
     const apiUrl = `https://shot.screenshotapi.net/v3/screenshot?${params.toString()}`
 
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 25000)
+    const timeout = setTimeout(() => controller.abort(), 45000)
 
     const res = await fetch(apiUrl, { signal: controller.signal })
     clearTimeout(timeout)
@@ -196,7 +196,7 @@ async function takeScreenshotOne(
 
     const apiUrl = `https://api.screenshotone.com/take?${params.toString()}`
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 25000)
+    const timeout = setTimeout(() => controller.abort(), 45000)
 
     const res = await fetch(apiUrl, { signal: controller.signal })
     clearTimeout(timeout)
