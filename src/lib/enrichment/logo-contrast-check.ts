@@ -138,16 +138,46 @@ export async function checkLogoVisibility(
 
   // ─── Try alternative logo candidates ────────────────────
 
-  // Sort by score descending, skip current logo
+  // Filter candidates to ONLY logo-like images (not photos, og-images, etc.)
+  const logoSources = new Set(['header-logo', 'link-icon', 'apple-touch-icon', 'inline-svg', 'manifest-icon', 'favicon'])
+
   const alternatives = logoCandidates
-    .filter(c => c.url !== currentLogoUrl && c.score >= 50)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5) // check top 5 alternatives
+    .filter(c => {
+      if (c.url === currentLogoUrl) return false
+      if (c.score < 50) return false
+      if (!logoSources.has(c.source)) return false
+      // Skip likely photos: check if URL contains photo/image keywords
+      const urlLower = c.url.toLowerCase()
+      if (/\b(photo|dsc|img_\d|image\/width=\d{3,}.*height=\d{3,}|preview)\b/.test(urlLower)) return false
+      // Skip empty SVG placeholders (data URIs that are too small)
+      if (c.url.startsWith('data:') && c.url.length < 500) return false
+      return true
+    })
+    .sort((a, b) => {
+      // Prefer candidates with "logo" in URL
+      const aHasLogo = a.url.toLowerCase().includes('logo') ? 1 : 0
+      const bHasLogo = b.url.toLowerCase().includes('logo') ? 1 : 0
+      if (aHasLogo !== bHasLogo) return bHasLogo - aHasLogo
+      return b.score - a.score
+    })
+    .slice(0, 5)
 
   for (const candidate of alternatives) {
     try {
       const buf = await fetchImage(candidate.url)
       if (!buf) continue
+
+      // Quick check: reject images that are too wide (photos are often 16:9+)
+      try {
+        const meta = await sharp(buf).metadata()
+        if (meta.width && meta.height) {
+          const aspect = meta.width / meta.height
+          if (aspect > 2.5 || aspect < 0.3) {
+            console.log(`[Logo Contrast] Skipping ${candidate.source}: aspect ${aspect.toFixed(1)} (too wide/tall for logo)`)
+            continue
+          }
+        }
+      } catch { /* can't read metadata, try anyway */ }
 
       const altLum = await getLogoLuminance(buf)
       const altRatio = contrastRatio(altLum, bgLum)
