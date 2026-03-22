@@ -195,7 +195,19 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
 
         let labelColor: string
         if (aiColors.label) {
-          labelColor = ensureLabelContrast(aiColors.label, bg)
+          // Hallucination guard: check if AI label exists in CSS candidates
+          const aiLabelLower = aiColors.label.toLowerCase()
+          const existsInCSS = cssCandidates.some(c => {
+            const dist = perceptualDistance(c.hex, aiLabelLower)
+            return dist < 40 // close enough to a real CSS color
+          })
+
+          if (existsInCSS) {
+            labelColor = ensureLabelContrast(aiColors.label, bg)
+          } else {
+            log(`Vision-AI label ${aiColors.label} NOT in CSS → hallucination, using CSS-derived label`)
+            labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+          }
         } else {
           labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
         }
