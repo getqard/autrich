@@ -255,6 +255,20 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // Rasterize SVG logos to PNG for preview
+      if (logoBuffer) {
+        const head = logoBuffer.subarray(0, 256).toString('utf8').trim()
+        if (head.startsWith('<svg') || head.startsWith('<?xml') || head.includes('<svg')) {
+          try {
+            const sharp = (await import('sharp')).default
+            logoBuffer = await sharp(logoBuffer)
+              .resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } })
+              .png()
+              .toBuffer()
+          } catch { /* keep original buffer */ }
+        }
+      }
+
       enrichmentPreview = {
         logo: logoBuffer && logoSource ? { base64: logoBuffer.toString('base64'), source: logoSource } : null,
         colors: passColors.palette,
