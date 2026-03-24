@@ -28,27 +28,28 @@ const STRIP_HEIGHT = 432
 
 // ─── Per-Industry Subject Descriptions ──────────────────────────
 
+// Short subjects like Passify — the AI composes the scene, we just name the subject
 const INDUSTRY_SUBJECTS: Record<string, string> = {
-  doener: 'Turkish döner kebab, glistening golden-brown meat on vertical spit, fresh pita bread, steam rising, authentic Mediterranean tavern',
-  barber: 'Classic barbershop, vintage straight razor resting on dark leather, brass fixtures, steamy mirror, masculine grooming atmosphere',
-  cafe: 'Artisan latte art in ceramic cup, coffee beans scattered on dark wood surface, steam curling upward, cozy coffeehouse',
-  pizzeria: 'Wood-fired pizza oven with visible flame glow, bubbling Margherita pizza, rustic brick interior, Italian kitchen',
-  baeckerei: 'Fresh golden sourdough loaves, flour-dusted dark wood surface, artisan pastries and croissants, traditional bakery',
-  restaurant: 'Fine dining plate with elegant plating on dark ceramic, candlelight, wine glass stem, sophisticated culinary setting',
-  shisha: 'Ornate hookah with flowing smoke wisps, brass detailing, velvet cushion, luxurious Middle Eastern lounge atmosphere',
-  nagelstudio: 'Elegant manicure setup, lacquer bottles in row, soft lighting reflecting on marble surface, beauty salon',
-  kosmetik: 'Luxury skincare products arranged on marble vanity, golden serum dropper, soft diffused lighting, beauty studio',
-  fitnessstudio: 'Heavy chrome weights, sweat droplets on metal surface, dramatic sidelighting on gym equipment, athletic atmosphere',
-  waschanlage: 'Water spray effects cascading over gleaming car surface, foam patterns, blue-tinted modern car wash facility',
-  eisdiele: 'Colorful gelato scoops in artisan display case, waffle cone with sprinkles, bright cheerful Italian gelateria',
-  sushi: 'Fresh nigiri on dark slate board, chopsticks resting on bamboo mat, wasabi dot, minimalist Japanese presentation',
-  burger: 'Juicy smash burger with melting cheese pull, sesame bun, on dark wooden board, dramatic food photography',
-  blumenladen: 'Fresh flower bouquet arrangement, colorful blooms mixed with green foliage, natural daylight, romantic floral shop',
-  imbiss: 'Crispy currywurst with golden fries and sauce drizzle, street food atmosphere, casual German Imbiss setting',
-  tattoo: 'Tattoo machine close-up with ink bottles lined up, dark industrial workspace, creative artistic atmosphere',
-  yogastudio: 'Serene zen yoga space, yoga mat on light wood floor, natural light rays streaming through window, minimalist peaceful',
-  tierhandlung: 'Warm pet shop interior, cute animals, natural wood display shelving, welcoming atmosphere with warm lighting',
-  reinigung: 'Crisp clean garments on hangers in row, pristine white shirts, organized modern dry cleaning facility',
+  doener: 'Döner kebab on vertical spit',
+  barber: 'Barbershop, straight razor, leather chair',
+  cafe: 'Latte art, coffee beans',
+  pizzeria: 'Pizza, wood-fired oven',
+  baeckerei: 'Fresh bread loaves, pastries',
+  restaurant: 'Fine dining plate, candlelight',
+  shisha: 'Hookah with smoke wisps',
+  nagelstudio: 'Nail polish bottles, manicure',
+  kosmetik: 'Skincare products, serum dropper',
+  fitnessstudio: 'Gym weights, dumbbells',
+  waschanlage: 'Car wash, water spray, foam',
+  eisdiele: 'Gelato scoops, waffle cone',
+  sushi: 'Sushi nigiri on dark slate',
+  burger: 'Burger with cheese pull',
+  blumenladen: 'Flower bouquet, colorful blooms',
+  imbiss: 'Currywurst with fries',
+  tattoo: 'Tattoo machine, ink bottles',
+  yogastudio: 'Yoga mat, zen space',
+  tierhandlung: 'Pet shop, cute animals',
+  reinigung: 'Clean garments on hangers',
 }
 
 // ─── Prompt Category Rules ──────────────────────────────────────
