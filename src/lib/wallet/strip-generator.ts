@@ -53,29 +53,13 @@ const INDUSTRY_SUBJECTS: Record<string, string> = {
 
 // ─── Prompt Category Rules ──────────────────────────────────────
 
-const CATEGORY_ACCENT_RULES: Record<PromptCategory, (accentHint: string) => string> = {
-  food: (hint) => `CRITICAL LIGHTING RULE:
-- The FOOD and PRODUCT must be lit with warm, appetizing lighting.
-- Keep food colors natural: golden-brown, rich, vibrant, appetizing.
-- The ${hint} color mood appears ONLY in the ENVIRONMENT:
-  background wall lighting, colored ambient glow, decorative surfaces, atmospheric light effects.
-- NEVER tint the food itself with the accent color. Food stays warm.`,
-
-  service: (hint) => `ACCENT COLOR RULE:
-- Incorporate ${hint} throughout the entire scene.
-- Apply it to: lighting, surfaces, tools, equipment, ambient glow, and accent highlights.
-- The ${hint} atmosphere should define the overall mood.`,
-
-  retail: (hint) => `ACCENT COLOR RULE:
-- The ${hint} color mood should be visible in products, decorations,
-  natural elements, and environmental lighting.
-- Integrate the color naturally rather than artificially.`,
+const CATEGORY_ACCENT_RULES: Record<PromptCategory, (hint: string) => string> = {
+  food: (hint) => `Food lit with warm appetizing lighting. ${hint} color mood only in background ambient glow. Never tint the food.`,
+  service: (hint) => `${hint} atmosphere throughout the scene — in lighting, surfaces, and ambient glow.`,
+  retail: (hint) => `${hint} color mood visible in the scene, naturally integrated.`,
 }
 
-const NEUTRAL_ACCENT_RULE = `LIGHTING RULE:
-- Dark, moody, cinematic lighting. No specific color accent.
-- Sophisticated monochrome atmosphere with deep shadows.
-- Think: premium black-and-white photography with subtle warm highlights.`
+const NEUTRAL_ACCENT_RULE = 'Dark moody cinematic lighting. No specific color accent. Monochrome atmosphere.'
 
 // ─── Generic (Abstract) Subject ─────────────────────────────────
 
@@ -101,23 +85,20 @@ export function buildStripPrompt(industrySlug: string, accentFamily: AccentFamil
     ? NEUTRAL_ACCENT_RULE
     : CATEGORY_ACCENT_RULES[category](family.aiHint)
 
-  return `Wide header image for a premium loyalty card.
+  // Short, clean prompt like Passify — long prompts confuse the AI and cause text artifacts
+  return `Wide header image for a loyalty card.
 SUBJECT: ${subject}
-COLOR MOOD: ${accentFamily !== 'neutral' ? family.aiHint : 'dark moody neutral'}
+STYLE: ${accentFamily !== 'neutral' ? family.aiHint : 'dark moody cinematic'}
+${accentRule}
 
 COMPOSITION:
 - Wide cinematic framing (16:9).
 - Place the main subject on the RIGHT SIDE of the frame.
-- Dark/moody overall tone. Deep shadows, dramatic contrast.
-- ${accentRule}
+- Dark/moody preferred.
+- NO TEXT. NO LOGOS.
+- The image should look like a premium header for a wallet pass.
 
-ABSOLUTE RULES:
-- ZERO text, letters, numbers, words, signs, labels, hex codes, or writing of ANY kind.
-- ZERO logos, watermarks, or brand marks.
-- ZERO human faces.
-- This is a PHOTOGRAPH, not a graphic design. Pure photography, no overlaid elements.
-
-A dramatic, commercial-grade photograph. Subject on the right.${accentFamily !== 'neutral' ? ` ${family.aiHint} atmosphere.` : ''}`
+A beautiful, commercial-grade shot of ${isGeneric ? 'abstract atmospheric elements' : subject.split(',')[0]}. The lighting is dramatic. The subject is clearly visible on the right.`
 }
 
 // ─── Image Generation ───────────────────────────────────────────
