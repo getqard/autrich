@@ -53,26 +53,22 @@ const INDUSTRY_SUBJECTS: Record<string, string> = {
 
 // ─── Prompt Category Rules ──────────────────────────────────────
 
-const CATEGORY_ACCENT_RULES: Record<PromptCategory, (accentHex: string, accentHint: string) => string> = {
-  food: (hex, hint) => `CRITICAL LIGHTING RULE:
-- The FOOD and PRODUCT must be lit with warm, appetizing lighting (2700K-3000K equivalent).
+const CATEGORY_ACCENT_RULES: Record<PromptCategory, (accentHint: string) => string> = {
+  food: (hint) => `CRITICAL LIGHTING RULE:
+- The FOOD and PRODUCT must be lit with warm, appetizing lighting.
 - Keep food colors natural: golden-brown, rich, vibrant, appetizing.
-- The accent color ${hex} appears ONLY in the ENVIRONMENT:
-  background neon signs, wall accent lighting, colored ambient glow,
-  decorative surfaces, atmospheric light effects.
-- NEVER apply ${hex} directly onto the food itself.
-- The ${hint} mood should come from environmental lighting, NOT food tinting.`,
+- The ${hint} color mood appears ONLY in the ENVIRONMENT:
+  background wall lighting, colored ambient glow, decorative surfaces, atmospheric light effects.
+- NEVER tint the food itself with the accent color. Food stays warm.`,
 
-  service: (hex, hint) => `ACCENT COLOR RULE:
-- IMPORTANT: Incorporate ${hex} throughout the entire scene.
+  service: (hint) => `ACCENT COLOR RULE:
+- Incorporate ${hint} throughout the entire scene.
 - Apply it to: lighting, surfaces, tools, equipment, ambient glow, and accent highlights.
-- The ${hint} atmosphere should define the overall mood.
-- Make the accent color prominently visible in the scene.`,
+- The ${hint} atmosphere should define the overall mood.`,
 
-  retail: (hex, hint) => `ACCENT COLOR RULE:
-- The accent color ${hex} should be visible in products, decorations,
+  retail: (hint) => `ACCENT COLOR RULE:
+- The ${hint} color mood should be visible in products, decorations,
   natural elements, and environmental lighting.
-- Let the ${hint} enhance the natural beauty of the scene.
 - Integrate the color naturally rather than artificially.`,
 }
 
@@ -103,23 +99,25 @@ export function buildStripPrompt(industrySlug: string, accentFamily: AccentFamil
   // Neutral family gets special treatment — no accent color
   const accentRule = accentFamily === 'neutral'
     ? NEUTRAL_ACCENT_RULE
-    : CATEGORY_ACCENT_RULES[category](family.representative, family.aiHint)
+    : CATEGORY_ACCENT_RULES[category](family.aiHint)
 
   return `Wide header image for a premium loyalty card.
 SUBJECT: ${subject}
-${accentFamily !== 'neutral' ? `ACCENT COLOR: ${family.representative}` : ''}
+COLOR MOOD: ${accentFamily !== 'neutral' ? family.aiHint : 'dark moody neutral'}
 
 COMPOSITION:
 - Wide cinematic framing (16:9).
-- Place the main subject on the RIGHT SIDE of the frame (left side will be overlaid with a color gradient).
+- Place the main subject on the RIGHT SIDE of the frame.
 - Dark/moody overall tone. Deep shadows, dramatic contrast.
-- 2025 dark & moody aesthetic: chiaroscuro lighting, matte textures, premium feel.
 - ${accentRule}
-- NO TEXT. NO LOGOS. NO PEOPLE'S FACES. NO WATERMARKS.
-- Professional commercial photography quality, 8K ultra detailed.
 
-A dramatic, commercial-grade shot of ${isGeneric ? 'abstract atmospheric elements' : subject.split(',')[0]}.
-Subject clearly visible on the right side of the frame.${accentFamily !== 'neutral' ? `\nThe ${family.aiHint} atmosphere defines the mood.` : ''}`
+ABSOLUTE RULES:
+- ZERO text, letters, numbers, words, signs, labels, hex codes, or writing of ANY kind.
+- ZERO logos, watermarks, or brand marks.
+- ZERO human faces.
+- This is a PHOTOGRAPH, not a graphic design. Pure photography, no overlaid elements.
+
+A dramatic, commercial-grade photograph. Subject on the right.${accentFamily !== 'neutral' ? ` ${family.aiHint} atmosphere.` : ''}`
 }
 
 // ─── Image Generation ───────────────────────────────────────────
