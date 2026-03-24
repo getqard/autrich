@@ -58,8 +58,12 @@ export default function StripPage() {
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [batchProgress, setBatchProgress] = useState<string | null>(null)
+  const [cacheBuster, setCacheBuster] = useState(Date.now())
 
   const industryData = INDUSTRIES.find(i => i.slug === industry)
+
+  // Append cache buster to image URLs to bypass CDN/browser cache
+  const bustUrl = (url: string) => `${url}?t=${cacheBuster}`
 
   async function handleMatch() {
     if (!industry) return
@@ -118,6 +122,7 @@ export default function StripPage() {
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error); return }
+      setCacheBuster(Date.now())
       handleMatch() // Refresh
     } catch {
       setError('Netzwerkfehler')
@@ -143,6 +148,7 @@ export default function StripPage() {
       if (!res.ok) { setError(data.error); return }
       setBatchProgress(`Fertig! ${data.generated} generiert, ${data.failed} fehlgeschlagen.`)
       if (data.errors?.length > 0) setError(data.errors.join('\n'))
+      setCacheBuster(Date.now())
       handleMatch()
     } catch {
       setError('Netzwerkfehler')
@@ -317,7 +323,7 @@ export default function StripPage() {
               <p className="text-[10px] text-zinc-500 mb-1">Raw Template (ohne Fade)</p>
               <div className="rounded overflow-hidden border border-zinc-800">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={previewResult.rawImageUrl} alt="Raw" className="w-full" style={{ aspectRatio: '1125/432' }} />
+                <img src={bustUrl(previewResult.rawImageUrl)} alt="Raw" className="w-full" style={{ aspectRatio: '1125/432' }} />
               </div>
             </div>
             <div>
@@ -369,7 +375,7 @@ export default function StripPage() {
                     }`}>
                       {tmpl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={tmpl.imageUrl} alt={fam.name} className="w-full aspect-[1125/432] object-cover" />
+                        <img src={bustUrl(tmpl.imageUrl)} alt={fam.name} className="w-full aspect-[1125/432] object-cover" />
                       ) : (
                         <div className="w-full aspect-[1125/432] bg-zinc-800/50 flex items-center justify-center">
                           <span className="text-[10px] text-zinc-600">fehlt</span>
