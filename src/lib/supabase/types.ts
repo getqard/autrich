@@ -713,15 +713,15 @@ export type EmailContactInsert = {
 // DOMAIN TYPES — Strip Templates
 // ============================================
 
+export type AccentFamily = 'warm' | 'red' | 'cool' | 'green' | 'pink' | 'purple' | 'neutral'
+
 export type StripTemplate = {
   id: string
   industry: string
-  industry_slug: string | null
-  color_variant: string
+  industry_slug: string
+  accent_family: AccentFamily
   image_url: string
   storage_path: string | null
-  hex_range_start: string | null
-  hex_range_end: string | null
   prompt_used: string | null
   created_at: string
 }
@@ -729,12 +729,10 @@ export type StripTemplate = {
 export type StripTemplateInsert = {
   id?: string
   industry: string
-  industry_slug?: string | null
-  color_variant: string
+  industry_slug: string
+  accent_family: AccentFamily
   image_url: string
   storage_path?: string | null
-  hex_range_start?: string | null
-  hex_range_end?: string | null
   prompt_used?: string | null
 }
 export type TrackingEventType =

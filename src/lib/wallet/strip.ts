@@ -1,31 +1,70 @@
 /**
- * Strip Template Matching
+ * Strip Template Matching — Accent-Family Based
  *
- * Given an industry slug and a background color, finds the best matching
- * pre-generated strip template. Uses HSL distance for color matching.
+ * Templates are organized by industry × accent color family.
+ * The accent family is detected from the lead's labelColor (hue-based).
+ * Matching uses a 4-tier fallback: exact → neutral → generic+family → generic+neutral.
  *
- * Flow:
- *   1. Find templates for the industry
- *   2. Compare bg_color against each variant's hex range
- *   3. Return closest match
- *   4. No match? → Imagen fallback (strip-generator.ts)
+ * Templates are stored RAW (no gradient). The gradient fade is applied
+ * at runtime with the lead's actual backgroundColor via applyStripGradient().
  */
 
 import { createServiceClient } from '@/lib/supabase/server'
-import type { StripTemplate } from '@/lib/supabase/types'
+import type { StripTemplate, AccentFamily } from '@/lib/supabase/types'
 
-// ─── Color Variant Definitions ───────────────────────────────────
+// ─── Accent Family Definitions ──────────────────────────────────
 
-export const COLOR_VARIANTS = [
-  { name: 'dark', hueRange: [0, 360], satRange: [0, 100], lumRange: [0, 25] },
-  { name: 'warm', hueRange: [15, 45], satRange: [30, 100], lumRange: [20, 55] },
-  { name: 'earthy', hueRange: [20, 50], satRange: [15, 60], lumRange: [20, 45] },
-  { name: 'vibrant', hueRange: [0, 360], satRange: [60, 100], lumRange: [30, 60] },
-] as const
+export type { AccentFamily } from '@/lib/supabase/types'
 
-export type ColorVariantName = 'dark' | 'warm' | 'earthy' | 'vibrant'
+export type PromptCategory = 'food' | 'service' | 'retail'
 
-// ─── HSL Utilities ───────────────────────────────────────────────
+export const ACCENT_FAMILIES: ReadonlyArray<{
+  name: AccentFamily
+  label: string
+  representative: string
+  hueMin: number
+  hueMax: number
+  aiHint: string
+}> = [
+  { name: 'warm',    label: 'Warm/Golden',   representative: '#D4A574', hueMin: 20,  hueMax: 65,  aiHint: 'golden amber warm candlelight, sunset glow, cozy elegance' },
+  { name: 'red',     label: 'Red/Crimson',   representative: '#DC2626', hueMin: 345, hueMax: 20,  aiHint: 'crimson fire dramatic red, bold intensity, fiery energy' },
+  { name: 'cool',    label: 'Cool/Blue',     representative: '#3B82F6', hueMin: 175, hueMax: 255, aiHint: 'blue neon cool steel, clean modern, crisp precision' },
+  { name: 'green',   label: 'Green/Natural',  representative: '#22C55E', hueMin: 65,  hueMax: 175, aiHint: 'green fresh natural emerald, organic vitality, zen' },
+  { name: 'pink',    label: 'Pink/Rose',     representative: '#EC4899', hueMin: 295, hueMax: 345, aiHint: 'pink rose feminine luxe, soft glamour, pastel elegance' },
+  { name: 'purple',  label: 'Purple/Violet', representative: '#8B5CF6', hueMin: 255, hueMax: 295, aiHint: 'purple violet luxury mystic, deep regal atmosphere' },
+  { name: 'neutral', label: 'Neutral/Dark',  representative: '#808080', hueMin: 0,   hueMax: 360, aiHint: 'dark moody neutral cinematic, sophisticated monochrome' },
+]
+
+/**
+ * Which prompt category each industry belongs to.
+ * Food: food must stay warm-lit, accent ONLY in environment.
+ * Service: accent can be everywhere.
+ * Retail: accent in products + environment.
+ */
+export const INDUSTRY_PROMPT_CATEGORY: Record<string, PromptCategory> = {
+  doener: 'food',
+  cafe: 'food',
+  pizzeria: 'food',
+  baeckerei: 'food',
+  restaurant: 'food',
+  sushi: 'food',
+  burger: 'food',
+  eisdiele: 'food',
+  imbiss: 'food',
+  barber: 'service',
+  nagelstudio: 'service',
+  kosmetik: 'service',
+  fitnessstudio: 'service',
+  waschanlage: 'service',
+  tattoo: 'service',
+  yogastudio: 'service',
+  reinigung: 'service',
+  blumenladen: 'retail',
+  tierhandlung: 'retail',
+  shisha: 'retail',
+}
+
+// ─── Accent Family Detection ────────────────────────────────────
 
 function hexToHSL(hex: string): { h: number; s: number; l: number } {
   const cleaned = hex.replace('#', '')
@@ -37,9 +76,7 @@ function hexToHSL(hex: string): { h: number; s: number; l: number } {
   const min = Math.min(r, g, b)
   const l = (max + min) / 2
 
-  if (max === min) {
-    return { h: 0, s: 0, l: l * 100 }
-  }
+  if (max === min) return { h: 0, s: 0, l }
 
   const d = max - min
   const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
@@ -49,137 +86,142 @@ function hexToHSL(hex: string): { h: number; s: number; l: number } {
   else if (max === g) h = ((b - r) / d + 2) / 6
   else h = ((r - g) / d + 4) / 6
 
-  return { h: h * 360, s: s * 100, l: l * 100 }
+  return { h: h * 360, s, l }
 }
 
 /**
- * Calculate HSL distance between two hex colors.
- * Returns a score 0-100 where 0 = identical.
+ * Detect which accent family a hex color belongs to.
+ * Uses hue-based classification with saturation gate.
  */
-function hslDistance(hex1: string, hex2: string): number {
-  const c1 = hexToHSL(hex1)
-  const c2 = hexToHSL(hex2)
+export function detectAccentFamily(hex: string): AccentFamily {
+  const { h, s } = hexToHSL(hex)
 
-  // Hue is circular (0-360)
-  let hueDiff = Math.abs(c1.h - c2.h)
-  if (hueDiff > 180) hueDiff = 360 - hueDiff
+  // Low saturation → neutral (grays, blacks, whites)
+  if (s < 0.15) return 'neutral'
 
-  const satDiff = Math.abs(c1.s - c2.s)
-  const lumDiff = Math.abs(c1.l - c2.l)
+  // Hue-based classification
+  if (h >= 345 || h < 20) return 'red'
+  if (h >= 20 && h < 65) return 'warm'
+  if (h >= 65 && h < 175) return 'green'
+  if (h >= 175 && h < 255) return 'cool'
+  if (h >= 255 && h < 295) return 'purple'
+  if (h >= 295 && h < 345) return 'pink'
 
-  // Weight: luminance matters most for strip readability
-  return (hueDiff / 360) * 30 + (satDiff / 100) * 30 + (lumDiff / 100) * 40
+  return 'neutral'
 }
 
 /**
- * Detect which color variant a hex color belongs to.
+ * Get the family definition for a given accent family name.
  */
-export function detectColorVariant(hex: string): ColorVariantName {
-  const { h, s, l } = hexToHSL(hex)
-
-  // Dark colors (low luminance)
-  if (l < 25) return 'dark'
-
-  // Vibrant colors (high saturation)
-  if (s > 60 && l >= 30 && l <= 60) return 'vibrant'
-
-  // Warm colors (orange-brown hue range)
-  if (h >= 15 && h <= 45 && s >= 30) return 'warm'
-
-  // Earthy colors (similar hue but lower saturation)
-  if (h >= 20 && h <= 50 && s >= 15 && s < 60) return 'earthy'
-
-  // Default to dark for very desaturated or very light
-  if (l > 60) return 'vibrant'
-
-  return 'dark'
+export function getAccentFamilyDef(family: AccentFamily) {
+  return ACCENT_FAMILIES.find(f => f.name === family)!
 }
 
-// ─── Template Matching ───────────────────────────────────────────
+// ─── Template Matching ──────────────────────────────────────────
 
 export type StripMatchResult = {
   template: StripTemplate
-  variant: string
-  distance: number
+  accentFamily: AccentFamily
+  tier: 1 | 2 | 3 | 4
   imageUrl: string
 }
 
 /**
- * Find the best matching strip template for an industry + color.
- * Returns null if no templates exist for the industry.
+ * Find the best matching strip template with 4-tier fallback.
+ *
+ * Tier 1: exact industry + exact accent family
+ * Tier 2: exact industry + neutral fallback
+ * Tier 3: generic + exact accent family
+ * Tier 4: generic + neutral (absolute last resort)
+ *
+ * Returns null if no templates exist at all → caller falls back to on-demand AI.
  */
 export async function matchStripTemplate(
   industrySlug: string,
-  bgColor: string,
+  accentColor: string | null,
 ): Promise<StripMatchResult | null> {
+  const family = accentColor ? detectAccentFamily(accentColor) : 'neutral'
   const supabase = createServiceClient()
 
-  // Fetch all templates for this industry
-  const { data: templates } = await supabase
-    .from('strip_templates')
-    .select('*')
-    .or(`industry_slug.eq.${industrySlug},industry.eq.${industrySlug}`)
+  // Tier 1: Exact industry + exact family
+  let template = await findTemplate(supabase, industrySlug, family)
+  if (template) return buildResult(template, family, 1, supabase)
 
-  if (!templates || templates.length === 0) return null
-
-  // Find closest match by color distance
-  let bestMatch: StripMatchResult | null = null
-  let bestDistance = Infinity
-
-  for (const template of templates) {
-    // Use hex_range_start as the reference color for distance calculation
-    const refColor = template.hex_range_start || getVariantReferenceColor(template.color_variant)
-    const distance = hslDistance(bgColor, refColor)
-
-    if (distance < bestDistance) {
-      bestDistance = distance
-      const { data: publicUrl } = supabase.storage
-        .from('strip-templates')
-        .getPublicUrl(template.storage_path || template.image_url)
-
-      bestMatch = {
-        template,
-        variant: template.color_variant,
-        distance,
-        imageUrl: template.storage_path ? publicUrl.publicUrl : template.image_url,
-      }
-    }
+  // Tier 2: Exact industry + neutral
+  if (family !== 'neutral') {
+    template = await findTemplate(supabase, industrySlug, 'neutral')
+    if (template) return buildResult(template, 'neutral', 2, supabase)
   }
 
-  return bestMatch
+  // Tier 3: Generic + exact family
+  template = await findTemplate(supabase, 'generic', family)
+  if (template) return buildResult(template, family, 3, supabase)
+
+  // Tier 4: Generic + neutral
+  template = await findTemplate(supabase, 'generic', 'neutral')
+  if (template) return buildResult(template, 'neutral', 4, supabase)
+
+  return null
 }
 
-/**
- * Get all templates for an industry.
- */
-export async function getIndustryTemplates(industrySlug: string): Promise<StripTemplate[]> {
-  const supabase = createServiceClient()
-
+async function findTemplate(
+  supabase: ReturnType<typeof createServiceClient>,
+  industrySlug: string,
+  accentFamily: AccentFamily,
+): Promise<StripTemplate | null> {
   const { data } = await supabase
     .from('strip_templates')
     .select('*')
-    .or(`industry_slug.eq.${industrySlug},industry.eq.${industrySlug}`)
-    .order('color_variant')
+    .eq('industry_slug', industrySlug)
+    .eq('accent_family', accentFamily)
+    .limit(1)
+    .single()
 
-  return data || []
+  return data as StripTemplate | null
 }
 
-/**
- * Get all templates grouped by industry.
- */
+function buildResult(
+  template: StripTemplate,
+  family: AccentFamily,
+  tier: 1 | 2 | 3 | 4,
+  supabase: ReturnType<typeof createServiceClient>,
+): StripMatchResult {
+  let imageUrl = template.image_url
+  if (template.storage_path) {
+    const { data } = supabase.storage
+      .from('strip-templates')
+      .getPublicUrl(template.storage_path)
+    imageUrl = data.publicUrl
+  }
+
+  return { template, accentFamily: family, tier, imageUrl }
+}
+
+// ─── List Templates ─────────────────────────────────────────────
+
+export async function getIndustryTemplates(industrySlug: string): Promise<StripTemplate[]> {
+  const supabase = createServiceClient()
+  const { data } = await supabase
+    .from('strip_templates')
+    .select('*')
+    .eq('industry_slug', industrySlug)
+    .order('accent_family')
+
+  return (data || []) as StripTemplate[]
+}
+
 export async function getAllTemplates(): Promise<Map<string, StripTemplate[]>> {
   const supabase = createServiceClient()
-
   const { data } = await supabase
     .from('strip_templates')
     .select('*')
     .order('industry_slug')
-    .order('color_variant')
+    .order('accent_family')
 
   const grouped = new Map<string, StripTemplate[]>()
   if (data) {
-    for (const template of data) {
-      const key = template.industry_slug || template.industry
+    for (const template of data as StripTemplate[]) {
+      const key = template.industry_slug
       const group = grouped.get(key) || []
       group.push(template)
       grouped.set(key, group)
@@ -187,17 +229,4 @@ export async function getAllTemplates(): Promise<Map<string, StripTemplate[]>> {
   }
 
   return grouped
-}
-
-/**
- * Default reference color for each variant (used when hex_range_start is missing).
- */
-function getVariantReferenceColor(variant: string): string {
-  switch (variant) {
-    case 'dark': return '#1a1a2e'
-    case 'warm': return '#8B4513'
-    case 'earthy': return '#5C4033'
-    case 'vibrant': return '#B22222'
-    default: return '#1a1a2e'
-  }
 }

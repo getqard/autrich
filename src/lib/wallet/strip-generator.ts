@@ -1,225 +1,371 @@
 /**
- * Strip Image Generator — Google Imagen 4.0
+ * Strip Image Generator — Gemini Image Generation
  *
- * Generates atmospheric 1125×432 strip images for Apple Wallet passes.
- * Used for:
- *   1. Batch pre-generation of all industry × color variant templates ($2.40 one-time)
- *   2. On-demand fallback when no template matches
+ * Generates atmospheric 1125x432 strip images for Apple Wallet passes.
+ * Uses Gemini 3 Pro Image (primary) with Imagen 4 Fast fallback.
  *
- * Each generated image is saved to Supabase Storage and registered in strip_templates.
+ * Key innovation: 3 prompt categories (Food / Service / Retail)
+ * Food: food stays warm-lit, accent color ONLY in environment
+ * Service: accent color everywhere
+ * Retail: accent in products + environment
+ *
+ * Templates stored RAW (no gradient). Gradient applied at runtime.
  */
 
+import { GoogleGenAI } from '@google/genai'
 import { createServiceClient } from '@/lib/supabase/server'
 import { INDUSTRIES } from '@/data/industries-seed'
-import type { ColorVariantName } from './strip'
+import {
+  ACCENT_FAMILIES,
+  INDUSTRY_PROMPT_CATEGORY,
+  getAccentFamilyDef,
+  type AccentFamily,
+  type PromptCategory,
+} from './strip'
 
-// ─── Prompt Templates per Industry ──────────────────────────────
+const STRIP_WIDTH = 1125
+const STRIP_HEIGHT = 432
 
-const INDUSTRY_PROMPTS: Record<string, string> = {
-  doener: 'Atmospheric Turkish kebab restaurant scene, warm ambient lighting, traditional döner meat on vertical spit, fresh pita bread, authentic Mediterranean atmosphere',
-  barber: 'Professional barbershop interior, vintage barber tools, leather chair, warm masculine lighting, classic grooming atmosphere',
-  cafe: 'Cozy coffee shop scene, steaming latte art, warm natural lighting, wooden furniture, artisan coffee beans, inviting cafe atmosphere',
-  pizzeria: 'Authentic Italian pizzeria, wood-fired pizza oven glow, fresh Margherita pizza, rustic Mediterranean kitchen, warm atmosphere',
-  baeckerei: 'Traditional German bakery, fresh golden bread loaves, flour dusted wooden surface, warm oven light, artisan pastries',
-  restaurant: 'Elegant restaurant interior, fine dining table setting, warm candlelight ambiance, sophisticated culinary atmosphere',
-  shisha: 'Atmospheric shisha lounge, ornate hookah with smoke wisps, warm ambient lighting, luxurious Middle Eastern decor, velvet seating',
-  nagelstudio: 'Modern nail salon, elegant manicure setup, soft pink lighting, professional nail art tools, luxurious beauty atmosphere',
-  kosmetik: 'Luxury beauty studio, skincare products arrangement, soft golden lighting, marble surfaces, elegant spa atmosphere',
-  fitnessstudio: 'Modern gym interior, professional workout equipment, dramatic lighting, motivational athletic atmosphere',
-  waschanlage: 'Professional car wash facility, water spray effects, blue neon lighting, gleaming clean car surface, modern automotive care',
-  eisdiele: 'Artisan ice cream shop, colorful gelato scoops in display, bright cheerful atmosphere, waffle cones, Italian gelateria style',
-  sushi: 'Japanese sushi bar, fresh nigiri on wooden board, elegant minimalist presentation, zen atmosphere, chopsticks on bamboo mat',
-  burger: 'Gourmet burger restaurant, juicy burger with melting cheese, dramatic food photography lighting, rustic wooden board',
-  blumenladen: 'Beautiful flower shop, fresh colorful bouquets, natural daylight, green foliage, romantic floral arrangement',
-  imbiss: 'German street food scene, crispy currywurst with golden fries, warm food truck lighting, casual outdoor atmosphere',
-  tattoo: 'Professional tattoo studio, artistic ink designs, dramatic dark lighting, creative industrial interior, tattoo machine closeup',
-  yogastudio: 'Serene yoga studio, natural light streaming in, minimalist zen space, yoga mat and meditation cushion, peaceful atmosphere',
-  tierhandlung: 'Charming pet shop, cute animals, warm welcoming interior, pet accessories display, natural warm lighting',
-  reinigung: 'Professional dry cleaning service, crisp clean garments on hangers, organized laundry, pristine white shirts, modern facility',
+// ─── Per-Industry Subject Descriptions ──────────────────────────
+
+const INDUSTRY_SUBJECTS: Record<string, string> = {
+  doener: 'Turkish döner kebab, glistening golden-brown meat on vertical spit, fresh pita bread, steam rising, authentic Mediterranean tavern',
+  barber: 'Classic barbershop, vintage straight razor resting on dark leather, brass fixtures, steamy mirror, masculine grooming atmosphere',
+  cafe: 'Artisan latte art in ceramic cup, coffee beans scattered on dark wood surface, steam curling upward, cozy coffeehouse',
+  pizzeria: 'Wood-fired pizza oven with visible flame glow, bubbling Margherita pizza, rustic brick interior, Italian kitchen',
+  baeckerei: 'Fresh golden sourdough loaves, flour-dusted dark wood surface, artisan pastries and croissants, traditional bakery',
+  restaurant: 'Fine dining plate with elegant plating on dark ceramic, candlelight, wine glass stem, sophisticated culinary setting',
+  shisha: 'Ornate hookah with flowing smoke wisps, brass detailing, velvet cushion, luxurious Middle Eastern lounge atmosphere',
+  nagelstudio: 'Elegant manicure setup, lacquer bottles in row, soft lighting reflecting on marble surface, beauty salon',
+  kosmetik: 'Luxury skincare products arranged on marble vanity, golden serum dropper, soft diffused lighting, beauty studio',
+  fitnessstudio: 'Heavy chrome weights, sweat droplets on metal surface, dramatic sidelighting on gym equipment, athletic atmosphere',
+  waschanlage: 'Water spray effects cascading over gleaming car surface, foam patterns, blue-tinted modern car wash facility',
+  eisdiele: 'Colorful gelato scoops in artisan display case, waffle cone with sprinkles, bright cheerful Italian gelateria',
+  sushi: 'Fresh nigiri on dark slate board, chopsticks resting on bamboo mat, wasabi dot, minimalist Japanese presentation',
+  burger: 'Juicy smash burger with melting cheese pull, sesame bun, on dark wooden board, dramatic food photography',
+  blumenladen: 'Fresh flower bouquet arrangement, colorful blooms mixed with green foliage, natural daylight, romantic floral shop',
+  imbiss: 'Crispy currywurst with golden fries and sauce drizzle, street food atmosphere, casual German Imbiss setting',
+  tattoo: 'Tattoo machine close-up with ink bottles lined up, dark industrial workspace, creative artistic atmosphere',
+  yogastudio: 'Serene zen yoga space, yoga mat on light wood floor, natural light rays streaming through window, minimalist peaceful',
+  tierhandlung: 'Warm pet shop interior, cute animals, natural wood display shelving, welcoming atmosphere with warm lighting',
+  reinigung: 'Crisp clean garments on hangers in row, pristine white shirts, organized modern dry cleaning facility',
 }
 
-const VARIANT_STYLE_SUFFIX: Record<ColorVariantName, string> = {
-  dark: ', dark moody tones, deep shadows, dramatic low-key lighting, cinematic noir atmosphere',
-  warm: ', warm golden tones, amber lighting, cozy inviting warmth, sunset-like glow',
-  earthy: ', earthy natural tones, muted brown and green palette, organic rustic feel, vintage warmth',
-  vibrant: ', vibrant rich colors, saturated bold tones, energetic dynamic lighting, eye-catching contrast',
+// ─── Prompt Category Rules ──────────────────────────────────────
+
+const CATEGORY_ACCENT_RULES: Record<PromptCategory, (accentHex: string, accentHint: string) => string> = {
+  food: (hex, hint) => `CRITICAL LIGHTING RULE:
+- The FOOD and PRODUCT must be lit with warm, appetizing lighting (2700K-3000K equivalent).
+- Keep food colors natural: golden-brown, rich, vibrant, appetizing.
+- The accent color ${hex} appears ONLY in the ENVIRONMENT:
+  background neon signs, wall accent lighting, colored ambient glow,
+  decorative surfaces, atmospheric light effects.
+- NEVER apply ${hex} directly onto the food itself.
+- The ${hint} mood should come from environmental lighting, NOT food tinting.`,
+
+  service: (hex, hint) => `ACCENT COLOR RULE:
+- IMPORTANT: Incorporate ${hex} throughout the entire scene.
+- Apply it to: lighting, surfaces, tools, equipment, ambient glow, and accent highlights.
+- The ${hint} atmosphere should define the overall mood.
+- Make the accent color prominently visible in the scene.`,
+
+  retail: (hex, hint) => `ACCENT COLOR RULE:
+- The accent color ${hex} should be visible in products, decorations,
+  natural elements, and environmental lighting.
+- Let the ${hint} enhance the natural beauty of the scene.
+- Integrate the color naturally rather than artificially.`,
 }
+
+const NEUTRAL_ACCENT_RULE = `LIGHTING RULE:
+- Dark, moody, cinematic lighting. No specific color accent.
+- Sophisticated monochrome atmosphere with deep shadows.
+- Think: premium black-and-white photography with subtle warm highlights.`
+
+// ─── Generic (Abstract) Subject ─────────────────────────────────
+
+const GENERIC_SUBJECT = 'Abstract premium atmospheric scene — bokeh lights, dramatic shadows, luxury textures, subtle light gradients, no specific objects or food'
+
+// ─── Prompt Builders ────────────────────────────────────────────
 
 /**
- * Build the Imagen prompt for a given industry + color variant.
+ * Build the full prompt for a given industry + accent family.
+ * Applies food-safe rules for food industries.
  */
-export function buildStripPrompt(industrySlug: string, colorVariant: ColorVariantName): string {
-  const base = INDUSTRY_PROMPTS[industrySlug] || `Professional ${industrySlug} business scene, atmospheric lighting, high quality commercial photography`
-  const style = VARIANT_STYLE_SUFFIX[colorVariant]
-  return `${base}${style}. Horizontal wide banner format, no text, no logos, no people's faces, professional stock photo quality, 8k ultra detailed`
+export function buildStripPrompt(industrySlug: string, accentFamily: AccentFamily): string {
+  const isGeneric = industrySlug === 'generic'
+  const subject = isGeneric
+    ? GENERIC_SUBJECT
+    : (INDUSTRY_SUBJECTS[industrySlug] || `Professional ${industrySlug} business scene, atmospheric lighting, commercial photography`)
+
+  const family = getAccentFamilyDef(accentFamily)
+  const category = isGeneric ? 'retail' : (INDUSTRY_PROMPT_CATEGORY[industrySlug] || 'service')
+
+  // Neutral family gets special treatment — no accent color
+  const accentRule = accentFamily === 'neutral'
+    ? NEUTRAL_ACCENT_RULE
+    : CATEGORY_ACCENT_RULES[category](family.representative, family.aiHint)
+
+  return `Wide header image for a premium loyalty card.
+SUBJECT: ${subject}
+${accentFamily !== 'neutral' ? `ACCENT COLOR: ${family.representative}` : ''}
+
+COMPOSITION:
+- Wide cinematic framing (16:9).
+- Place the main subject on the RIGHT SIDE of the frame (left side will be overlaid with a color gradient).
+- Dark/moody overall tone. Deep shadows, dramatic contrast.
+- 2025 dark & moody aesthetic: chiaroscuro lighting, matte textures, premium feel.
+- ${accentRule}
+- NO TEXT. NO LOGOS. NO PEOPLE'S FACES. NO WATERMARKS.
+- Professional commercial photography quality, 8K ultra detailed.
+
+A dramatic, commercial-grade shot of ${isGeneric ? 'abstract atmospheric elements' : subject.split(',')[0]}.
+Subject clearly visible on the right side of the frame.${accentFamily !== 'neutral' ? `\nThe ${family.aiHint} atmosphere defines the mood.` : ''}`
 }
 
+// ─── Image Generation ───────────────────────────────────────────
+
 /**
- * Generate a strip image using Google Imagen 4.0 API.
- * Returns the image as a PNG buffer.
+ * Generate a strip image using Gemini Image Generation API.
+ * Returns the RAW image (no gradient) as a PNG buffer at 1125x432.
  */
 export async function generateStripImage(
   industrySlug: string,
-  colorVariant: ColorVariantName,
+  accentFamily: AccentFamily,
 ): Promise<{ buffer: Buffer; prompt: string }> {
-  const prompt = buildStripPrompt(industrySlug, colorVariant)
+  const prompt = buildStripPrompt(industrySlug, accentFamily)
 
   const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY not configured')
-  }
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured')
 
-  // Use Imagen 4.0 via Gemini API
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        instances: [{ prompt }],
-        parameters: {
-          sampleCount: 1,
-          aspectRatio: '16:9', // Closest to 1125×432 (2.6:1)
-          personGeneration: 'DONT_ALLOW',
-          safetyFilterLevel: 'BLOCK_ONLY_HIGH',
-        },
-      }),
+  const ai = new GoogleGenAI({ apiKey })
+  let rawBase64: string | null = null
+
+  // Primary: Gemini 3 Pro Image
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
+      contents: [prompt],
+      config: {
+        responseModalities: ['IMAGE'],
+        imageConfig: { aspectRatio: '16:9' as unknown as undefined },
+      },
+    })
+
+    const part = response.candidates?.[0]?.content?.parts?.[0]
+    if (part?.inlineData?.data) {
+      rawBase64 = part.inlineData.data
     }
-  )
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Imagen API error ${response.status}: ${errorText}`)
+  } catch (err) {
+    console.log(`[Strip Gen] Gemini 3 Pro failed: ${err instanceof Error ? err.message : err}`)
   }
 
-  const result = await response.json()
-  const prediction = result.predictions?.[0]
-
-  if (!prediction?.bytesBase64Encoded) {
-    throw new Error('Imagen API returned no image data')
+  // Fallback: Imagen 4 Fast
+  if (!rawBase64) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            instances: [{ prompt }],
+            parameters: {
+              sampleCount: 1,
+              aspectRatio: '16:9',
+              personGeneration: 'DONT_ALLOW',
+              safetyFilterLevel: 'BLOCK_ONLY_HIGH',
+            },
+          }),
+        }
+      )
+      if (!response.ok) throw new Error(`Imagen ${response.status}`)
+      const result = await response.json()
+      if (result.predictions?.[0]?.bytesBase64Encoded) {
+        rawBase64 = result.predictions[0].bytesBase64Encoded
+      }
+    } catch (err) {
+      console.log(`[Strip Gen] Imagen 4 also failed: ${err instanceof Error ? err.message : err}`)
+    }
   }
 
-  const imageBuffer = Buffer.from(prediction.bytesBase64Encoded, 'base64')
+  if (!rawBase64) throw new Error('All image generation models failed')
 
-  // Resize to exact strip dimensions (1125×432) using sharp
-  const sharp = (await import('sharp')).default
-  const resized = await sharp(imageBuffer)
-    .resize(1125, 432, { fit: 'cover', position: 'center' })
-    .png({ compressionLevel: 6 })
-    .toBuffer()
+  // Post-process: crop to 1125x432, right-aligned
+  const rawBuffer = Buffer.from(rawBase64, 'base64')
+  const buffer = await cropStripRightAligned(rawBuffer)
 
-  return { buffer: resized, prompt }
+  return { buffer, prompt }
 }
 
 /**
- * Generate a strip template and save it to storage + DB.
+ * Crop AI-generated image to 1125x432, keeping the right side visible.
+ */
+async function cropStripRightAligned(rawBuffer: Buffer): Promise<Buffer> {
+  const { createCanvas, loadImage } = await import('canvas')
+
+  const canvas = createCanvas(STRIP_WIDTH, STRIP_HEIGHT)
+  const ctx = canvas.getContext('2d')
+  const img = await loadImage(rawBuffer)
+
+  const scale = Math.max(STRIP_WIDTH / img.width, STRIP_HEIGHT / img.height)
+  const scaledWidth = img.width * scale
+  const scaledHeight = img.height * scale
+
+  // Right-align: push image left so right-side content stays visible
+  const offsetX = STRIP_WIDTH - scaledWidth
+  const offsetY = (STRIP_HEIGHT - scaledHeight) / 2
+
+  ctx.drawImage(img, offsetX, offsetY, scaledWidth, scaledHeight)
+
+  return canvas.toBuffer('image/png')
+}
+
+// ─── Gradient Fade (applied at runtime) ─────────────────────────
+
+/**
+ * Apply gradient fade overlay to a strip image.
+ * Called at runtime when the lead's actual backgroundColor is known.
+ *
+ * Gradient: solid bg on left → transparent on right (matches Passify).
+ * Stops: 0-20% opaque → 85-100% transparent.
+ */
+export async function applyStripGradient(
+  stripBuffer: Buffer,
+  backgroundColor: string,
+): Promise<Buffer> {
+  const { createCanvas, loadImage } = await import('canvas')
+
+  const canvas = createCanvas(STRIP_WIDTH, STRIP_HEIGHT)
+  const ctx = canvas.getContext('2d')
+
+  const img = await loadImage(stripBuffer)
+  ctx.drawImage(img, 0, 0, STRIP_WIDTH, STRIP_HEIGHT)
+
+  const rgb = hexToRgb(backgroundColor)
+  const gradient = ctx.createLinearGradient(0, 0, STRIP_WIDTH, 0)
+  gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`)
+  gradient.addColorStop(0.2, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`)
+  gradient.addColorStop(0.85, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`)
+  gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`)
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, STRIP_WIDTH, STRIP_HEIGHT)
+
+  return canvas.toBuffer('image/png')
+}
+
+function hexToRgb(hex: string) {
+  const h = hex.replace('#', '')
+  return {
+    r: parseInt(h.substring(0, 2), 16),
+    g: parseInt(h.substring(2, 4), 16),
+    b: parseInt(h.substring(4, 6), 16),
+  }
+}
+
+// ─── Template Storage ───────────────────────────────────────────
+
+/**
+ * Generate a strip template and save to Supabase Storage + DB.
+ * Template is stored RAW (no gradient) for maximum reusability.
  */
 export async function generateAndSaveTemplate(
   industrySlug: string,
-  colorVariant: ColorVariantName,
+  accentFamily: AccentFamily,
 ): Promise<{ imageUrl: string; storagePath: string; prompt: string }> {
-  const { buffer, prompt } = await generateStripImage(industrySlug, colorVariant)
+  const { buffer, prompt } = await generateStripImage(industrySlug, accentFamily)
 
   const supabase = createServiceClient()
-  const storagePath = `${industrySlug}/${colorVariant}.png`
+  const storagePath = `${industrySlug}/${accentFamily}.png`
 
-  // Upload to storage
   const { error: uploadError } = await supabase.storage
     .from('strip-templates')
-    .upload(storagePath, buffer, {
-      contentType: 'image/png',
-      upsert: true,
-    })
+    .upload(storagePath, buffer, { contentType: 'image/png', upsert: true })
 
-  if (uploadError) {
-    throw new Error(`Storage upload failed: ${uploadError.message}`)
-  }
+  if (uploadError) throw new Error(`Storage upload failed: ${uploadError.message}`)
 
   const { data: publicUrl } = supabase.storage
     .from('strip-templates')
     .getPublicUrl(storagePath)
 
-  // Get industry defaults for hex range
-  const industry = INDUSTRIES.find(i => i.slug === industrySlug)
-  const hexStart = getVariantHexStart(colorVariant, industry?.default_color)
-  const hexEnd = getVariantHexEnd(colorVariant, industry?.default_color)
+  const industryName = industrySlug === 'generic'
+    ? 'Generic'
+    : (INDUSTRIES.find(i => i.slug === industrySlug)?.name || industrySlug)
 
-  // Upsert into strip_templates
   await supabase
     .from('strip_templates')
     .upsert({
-      industry: industrySlug,
+      industry: industryName,
       industry_slug: industrySlug,
-      color_variant: colorVariant,
+      accent_family: accentFamily,
       image_url: publicUrl.publicUrl,
       storage_path: storagePath,
-      hex_range_start: hexStart,
-      hex_range_end: hexEnd,
       prompt_used: prompt,
-    }, { onConflict: 'industry_slug,color_variant' })
+    }, { onConflict: 'industry_slug,accent_family' })
 
-  return {
-    imageUrl: publicUrl.publicUrl,
-    storagePath,
-    prompt,
-  }
+  return { imageUrl: publicUrl.publicUrl, storagePath, prompt }
 }
 
 /**
- * Generate ALL templates for ALL industries (80 total).
- * Returns progress updates via callback.
+ * Generate all templates for ALL industries.
+ * Supports filtering by industry and family, and skipping existing.
  */
-export async function generateAllTemplates(
-  onProgress?: (current: number, total: number, industry: string, variant: string) => void,
-): Promise<{ generated: number; failed: number; errors: string[] }> {
-  const variants: ColorVariantName[] = ['dark', 'warm', 'earthy', 'vibrant']
-  const total = INDUSTRIES.length * variants.length
+export async function generateAllTemplates(options?: {
+  skipExisting?: boolean
+  industries?: string[]
+  families?: AccentFamily[]
+  onProgress?: (current: number, total: number, industry: string, family: string) => void
+}): Promise<{ generated: number; skipped: number; failed: number; errors: string[] }> {
+  const { skipExisting = true, onProgress } = options || {}
+  const families: AccentFamily[] = options?.families || ['warm', 'red', 'cool', 'green', 'pink', 'purple', 'neutral']
+  const allIndustries = options?.industries || [...INDUSTRIES.map(i => i.slug), 'generic']
+
+  // Load existing templates to skip
+  let existingKeys = new Set<string>()
+  if (skipExisting) {
+    const supabase = createServiceClient()
+    const { data } = await supabase.from('strip_templates').select('industry_slug, accent_family')
+    if (data) {
+      existingKeys = new Set(data.map((t: { industry_slug: string; accent_family: string }) => `${t.industry_slug}/${t.accent_family}`))
+    }
+  }
+
+  const total = allIndustries.length * families.length
   let current = 0
+  let generated = 0
+  let skipped = 0
   let failed = 0
   const errors: string[] = []
 
-  for (const industry of INDUSTRIES) {
-    for (const variant of variants) {
+  for (const industrySlug of allIndustries) {
+    for (const family of families) {
       current++
-      onProgress?.(current, total, industry.slug, variant)
+      const key = `${industrySlug}/${family}`
 
-      try {
-        await generateAndSaveTemplate(industry.slug, variant)
-      } catch (err) {
-        failed++
-        const msg = `${industry.slug}/${variant}: ${err instanceof Error ? err.message : 'Unknown error'}`
-        errors.push(msg)
-        console.error(`[Strip Generator] Failed:`, msg)
+      if (existingKeys.has(key)) {
+        skipped++
+        onProgress?.(current, total, industrySlug, family)
+        continue
       }
 
-      // Small delay to avoid rate limiting
+      onProgress?.(current, total, industrySlug, family)
+
+      try {
+        await generateAndSaveTemplate(industrySlug, family)
+        generated++
+        console.log(`[Strip Gen] ✓ ${key} (${current}/${total})`)
+      } catch (err) {
+        failed++
+        const msg = `${key}: ${err instanceof Error ? err.message : 'Unknown error'}`
+        errors.push(msg)
+        console.error(`[Strip Gen] ✗ ${msg}`)
+      }
+
+      // Rate limit
       if (current < total) {
         await new Promise(resolve => setTimeout(resolve, 500))
       }
     }
   }
 
-  return { generated: current - failed, failed, errors }
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────
-
-function getVariantHexStart(variant: ColorVariantName, defaultColor?: string): string {
-  switch (variant) {
-    case 'dark': return '#0a0a15'
-    case 'warm': return defaultColor || '#6F4E37'
-    case 'earthy': return '#3C2A1E'
-    case 'vibrant': return '#8B0000'
-    default: return '#0a0a15'
-  }
-}
-
-function getVariantHexEnd(variant: ColorVariantName, defaultColor?: string): string {
-  switch (variant) {
-    case 'dark': return '#2d2d3f'
-    case 'warm': return defaultColor || '#B8860B'
-    case 'earthy': return '#8B7355'
-    case 'vibrant': return '#FF4500'
-    default: return '#2d2d3f'
-  }
+  return { generated, skipped, failed, errors }
 }

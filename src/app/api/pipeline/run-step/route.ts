@@ -6,7 +6,7 @@ import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
 import { classifyIndustry, classifyBusiness, generateCreativeContent } from '@/lib/ai/classifier'
 import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
-import { matchStripTemplate, detectColorVariant } from '@/lib/wallet/strip'
+import { matchStripTemplate, detectAccentFamily } from '@/lib/wallet/strip'
 import { generateStripImage } from '@/lib/wallet/strip-generator'
 import { INDUSTRIES } from '@/data/industries-seed'
 
@@ -324,6 +324,7 @@ async function runClassifyStep(url: string, context: Record<string, unknown>, st
 async function runStripStep(context: Record<string, unknown>, startTime: number) {
   const industrySlug = context.industrySlug as string
   const bgColor = context.backgroundColor as string
+  const accentColor = (context.accentColor || context.labelColor || null) as string | null
 
   if (!industrySlug || !bgColor) {
     return NextResponse.json({
@@ -331,8 +332,8 @@ async function runStripStep(context: Record<string, unknown>, startTime: number)
     }, { status: 400 })
   }
 
-  // Try template match first
-  const match = await matchStripTemplate(industrySlug, bgColor)
+  // Try template match (4-tier fallback, accent-based)
+  const match = await matchStripTemplate(industrySlug, accentColor)
 
   if (match) {
     return NextResponse.json({
@@ -341,17 +342,17 @@ async function runStripStep(context: Record<string, unknown>, startTime: number)
       durationMs: Date.now() - startTime,
       data: {
         source: 'template',
-        variant: match.variant,
-        distance: Math.round(match.distance),
+        accentFamily: match.accentFamily,
+        tier: match.tier,
         imageUrl: match.imageUrl,
         templateId: match.template.id,
       },
     })
   }
 
-  // No template — generate with AI
-  const variant = detectColorVariant(bgColor)
-  const { buffer, prompt } = await generateStripImage(industrySlug, variant)
+  // No template — generate on-demand with AI
+  const family = accentColor ? detectAccentFamily(accentColor) : 'neutral'
+  const { buffer, prompt } = await generateStripImage(industrySlug, family)
 
   return NextResponse.json({
     step: 'strip',
@@ -359,7 +360,7 @@ async function runStripStep(context: Record<string, unknown>, startTime: number)
     durationMs: Date.now() - startTime,
     data: {
       source: 'ai_generated',
-      variant,
+      accentFamily: family,
       prompt,
       base64: buffer.toString('base64'),
       sizeBytes: buffer.length,
