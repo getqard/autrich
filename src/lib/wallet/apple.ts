@@ -150,7 +150,15 @@ export async function generateApplePass(input: ApplePassInput): Promise<Buffer> 
   const inactiveStamps = '⚪'.repeat(input.maxStamps - input.currentStamps)
   const stampVisual = activeStamps + inactiveStamps
 
-  // Create PKPass
+  // Web service config (only HTTPS — Apple rejects HTTP)
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || ''
+  const webServiceConfig = baseUrl.startsWith('https') ? {
+    webServiceURL: `${baseUrl}/api/v1`,
+    authenticationToken: input.authToken,
+  } : {}
+
+  // Create PKPass (webServiceURL MUST be in constructor, like Passify)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pass = new PKPass(
     {},
     {
@@ -170,18 +178,13 @@ export async function generateApplePass(input: ApplePassInput): Promise<Buffer> 
       foregroundColor: input.textColor,
       labelColor: input.labelColor,
       logoText: input.businessName,
-    }
+      ...webServiceConfig,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
   )
 
   // Pass type
   pass.type = 'storeCard'
-
-  // Web service for install detection
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
-  if (baseUrl) {
-    ;(pass as unknown as Record<string, unknown>).webServiceURL = `${baseUrl}/api/v1`
-    ;(pass as unknown as Record<string, unknown>).authenticationToken = input.authToken
-  }
 
   // Barcode (QR → download page)
   pass.setBarcodes({
@@ -239,11 +242,11 @@ export async function generateApplePass(input: ApplePassInput): Promise<Buffer> 
 
   // Location relevance
   if (input.lat && input.lng) {
-    ;(pass as unknown as Record<string, unknown>).locations = [{
+    pass.setLocations({
       latitude: input.lat,
       longitude: input.lng,
       relevantText: input.lockscreenMessage || `Vergiss deinen Stempel nicht! ${input.stampEmoji}`,
-    }]
+    })
   }
 
   return pass.getAsBuffer()
