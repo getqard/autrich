@@ -32,13 +32,11 @@ export async function GET(
 
     const buffer = Buffer.from(await data.arrayBuffer())
 
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
         'Content-Type': 'application/vnd.apple.pkpass',
-        'Content-Disposition': `attachment; filename="${serial}.pkpass"`,
         'Last-Modified': new Date().toUTCString(),
-        'Cache-Control': 'no-cache',
       },
     })
   } catch (err) {
