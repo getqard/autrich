@@ -61,11 +61,23 @@ export async function GET() {
     pass.addBuffer('icon.png', minIcon)
     pass.addBuffer('icon@2x.png', minIcon)
 
-    // One field
+    // Fields (like Passify layout)
     pass.primaryFields.push({
-      key: 'test',
-      label: 'STATUS',
-      value: 'Certs funktionieren!',
+      key: 'stamps',
+      label: 'DEINE STEMPEL',
+      value: '3 von 10',
+    })
+
+    pass.secondaryFields.push({
+      key: 'reward',
+      label: 'PRÄMIE',
+      value: '1 Gratis Kaffee ☕',
+    })
+
+    pass.auxiliaryFields.push({
+      key: 'progress_visual',
+      label: 'FORTSCHRITT',
+      value: '☕ ☕ ☕ ⚪ ⚪ ⚪ ⚪ ⚪ ⚪ ⚪',
     })
 
     pass.setBarcodes({

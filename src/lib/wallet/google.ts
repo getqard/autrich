@@ -107,9 +107,10 @@ export function generateGoogleSaveLink(input: GooglePassInput): GoogleSaveLinkRe
   const classId = `${issuerId}.autrich_${input.serial.replace(/-/g, '_')}`
   const objectId = `${issuerId}.pass_${input.serial.replace(/-/g, '_')}`
 
-  // Build stamp visual
-  const stampVisual = input.stampEmoji.repeat(input.currentStamps) + '⚪'.repeat(input.maxStamps - input.currentStamps)
-  const progressText = `${input.currentStamps}/${input.maxStamps}`
+  // Build stamp visual with spaces (like Passify)
+  const remaining = Math.max(0, input.maxStamps - input.currentStamps)
+  const stampVisual = ((input.stampEmoji + ' ').repeat(input.currentStamps) + ('⚪ ').repeat(remaining)).trim()
+  const progressText = `${input.currentStamps} von ${input.maxStamps}`
 
   // Loyalty Class (template)
   const loyaltyClass: Record<string, unknown> = {

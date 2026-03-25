@@ -145,10 +145,9 @@ export function validateAppleConfig(): { valid: boolean; error?: string; mode?: 
 export async function generateApplePass(input: ApplePassInput): Promise<Buffer> {
   const certs = loadAppleCerts()
 
-  // Build stamp emoji visual: 🥙🥙🥙⚪⚪⚪⚪⚪⚪⚪
-  const activeStamps = input.stampEmoji.repeat(input.currentStamps)
-  const inactiveStamps = '⚪'.repeat(input.maxStamps - input.currentStamps)
-  const stampVisual = activeStamps + inactiveStamps
+  // Build stamp emoji visual with spaces: "🥙 🥙 🥙 ⚪ ⚪ ⚪ ⚪ ⚪ ⚪ ⚪"
+  const remaining = Math.max(0, input.maxStamps - input.currentStamps)
+  const stampVisual = ((input.stampEmoji + ' ').repeat(input.currentStamps) + ('⚪ ').repeat(remaining)).trim()
 
   // Web service config (only HTTPS — Apple rejects HTTP)
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || ''
@@ -193,18 +192,11 @@ export async function generateApplePass(input: ApplePassInput): Promise<Buffer> 
     messageEncoding: 'iso-8859-1',
   })
 
-  // Header: stamp count
-  pass.headerFields.push({
-    key: 'stamps',
-    label: input.passTitle,
-    value: `${input.currentStamps}/${input.maxStamps}`,
-  })
-
-  // Primary: stamp emoji visual
+  // Primary: stamp count (BIG text, like Passify)
   pass.primaryFields.push({
-    key: 'progress',
-    label: 'FORTSCHRITT',
-    value: stampVisual,
+    key: 'stamps',
+    label: 'DEINE STEMPEL',
+    value: `${input.currentStamps} von ${input.maxStamps}`,
   })
 
   // Secondary: reward
@@ -215,6 +207,13 @@ export async function generateApplePass(input: ApplePassInput): Promise<Buffer> 
     key: 'reward',
     label: 'PRÄMIE',
     value: rewardText,
+  })
+
+  // Auxiliary: emoji visual (with spaces, like Passify)
+  pass.auxiliaryFields.push({
+    key: 'progress_visual',
+    label: 'FORTSCHRITT',
+    value: stampVisual,
   })
 
   // Back fields
