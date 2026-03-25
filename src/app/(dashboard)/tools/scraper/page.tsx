@@ -72,6 +72,7 @@ type ScrapeResult = {
 
 export default function ScraperPage() {
   const [url, setUrl] = useState('')
+  const [businessName, setBusinessName] = useState('')
   const [gmapsCategory, setGmapsCategory] = useState('')
   const [forceRescrape, setForceRescrape] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -97,7 +98,7 @@ export default function ScraperPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          business_name: result.title || url.replace(/https?:\/\/(www\.)?/, '').split('/')[0],
+          business_name: businessName || result.title || url.replace(/https?:\/\/(www\.)?/, '').split('/')[0],
           url: result.finalUrl || url,
           logo_base64: ep.logo?.base64 || null,
           background_color: ep.passPreview?.bg || '#1a1a2e',
@@ -132,11 +133,15 @@ export default function ScraperPage() {
       if (gmapsCategory.trim()) body.gmaps_category = gmapsCategory.trim()
       if (forceRescrape) body.force = true
 
-      // Extract business name from URL for initials fallback
-      try {
-        const domain = new URL(url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}`).hostname
-        body.business_name = domain.replace(/^www\./, '').split('.')[0]
-      } catch { /* skip */ }
+      // Business name: user input (GMaps) > domain fallback
+      if (businessName.trim()) {
+        body.business_name = businessName.trim()
+      } else {
+        try {
+          const domain = new URL(url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}`).hostname
+          body.business_name = domain.replace(/^www\./, '').split('.')[0]
+        } catch { /* skip */ }
+      }
 
       const res = await fetch('/api/tools/scrape', {
         method: 'POST',
@@ -201,14 +206,24 @@ export default function ScraperPage() {
             Scrapen
           </button>
         </div>
-        <div className="flex gap-4">
-          <div className="flex-1">
-            <label className="block text-xs text-zinc-500 mb-1">GMaps Kategorie (optional — für Industry Mapping)</label>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1">Business Name (von GMaps)</label>
+            <input
+              type="text"
+              value={businessName}
+              onChange={(e) => setBusinessName(e.target.value)}
+              placeholder="z.B. Döner Palace Berlin"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-sm placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-white/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1">GMaps Kategorie (optional)</label>
             <input
               type="text"
               value={gmapsCategory}
               onChange={(e) => setGmapsCategory(e.target.value)}
-              placeholder="z.B. Turkish restaurant, Barber shop, Cafe"
+              placeholder="z.B. Turkish restaurant, Barber shop"
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-sm placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-white/20"
             />
           </div>
