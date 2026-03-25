@@ -193,47 +193,77 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         const bg = aiColors.background
         const textColor = deriveTextColor(bg)
 
-        // Check if website is monochrome — only count high-confidence saturated colors as evidence
-        // Low-confidence colors (< 0.70) are often framework noise, not brand colors
-        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2 && c.confidence >= 0.70)
+        // Check if logo is monochrome (white/black/gray)
+        const logoIsMonochrome = !logoColor || logoColor.saturation < 0.15
+
+        // Check if AI label came from logo palette (not from the website itself)
+        const labelFromLogoPalette = aiColors.label && palette && (
+          perceptualDistance(aiColors.label, palette.dominant || '#000') < 30 ||
+          perceptualDistance(aiColors.label, palette.accent || '#000') < 30
+        )
+
+        // Find best CSS accent color (saturated, good contrast on bg)
+        const bestCSSAccent = cssCandidates
+          .filter(c => colorSaturation(c.hex) >= 0.25 && c.confidence >= 0.45 && wcagContrastRatio(c.hex, bg) >= 2.0)
+          .sort((a, b) => (colorSaturation(b.hex) * b.confidence) - (colorSaturation(a.hex) * a.confidence))[0]
+
+        // Check if website is truly monochrome — no saturated CSS colors at all
+        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2 && c.confidence >= 0.45)
 
         let labelColor: string
-        if (aiColors.label) {
-          // Hallucination guard: check if AI label is close to any CSS candidate
-          // Higher confidence = more lenient (AI is more sure about what it sees)
+
+        // CASE 1: Logo is monochrome AND AI label came from logo palette
+        // → Don't trust logo-derived gold/color, use CSS accent instead
+        if (logoIsMonochrome && labelFromLogoPalette && bestCSSAccent) {
+          labelColor = ensureLabelContrast(bestCSSAccent.hex, bg)
+          log(`Logo monochrome + label from palette → CSS accent ${bestCSSAccent.hex} (${bestCSSAccent.source})`)
+
+        // CASE 2: AI has a label and it exists in CSS → trust it
+        } else if (aiColors.label) {
           const maxDist = aiColors.confidence >= 0.85 ? 80 : 60
-          const existsInCSS = cssCandidates.some(c => {
-            const dist = perceptualDistance(c.hex, aiColors.label!)
-            return dist < maxDist
-          })
+          const existsInCSS = cssCandidates.some(c => perceptualDistance(c.hex, aiColors.label!) < maxDist)
 
           if (existsInCSS) {
             labelColor = ensureLabelContrast(aiColors.label, bg)
           } else if (isMonochrome) {
-            // Monochrome website — AI correctly wanted white/gray but it was rejected
-            // Use a warm light gray that contrasts well on dark bg
+            // Truly monochrome website → neutral gray label
             const bgLum = hexLuminance(bg)
             labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
             log(`Monochrome website → neutral label ${labelColor}`)
+          } else if (bestCSSAccent) {
+            // AI hallucinated but CSS has a good accent → use it
+            log(`Vision-AI label ${aiColors.label} NOT in CSS → using CSS accent ${bestCSSAccent.hex}`)
+            labelColor = ensureLabelContrast(bestCSSAccent.hex, bg)
           } else {
-            log(`Vision-AI label ${aiColors.label} NOT in CSS → hallucination, using CSS-derived label`)
             labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
           }
+
+        // CASE 3: No AI label
         } else {
-          // AI returned no label (e.g. white was rejected for low saturation)
           if (isMonochrome) {
             const bgLum = hexLuminance(bg)
             labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
             log(`Monochrome website, no AI label → neutral label ${labelColor}`)
+          } else if (bestCSSAccent) {
+            labelColor = ensureLabelContrast(bestCSSAccent.hex, bg)
+            log(`No AI label → CSS accent ${bestCSSAccent.hex}`)
           } else {
             labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
           }
         }
 
         if (labelColor === textColor) {
-          // Shift label slightly to differentiate from text
           const bgLum = hexLuminance(bg)
           labelColor = bgLum < 0.3 ? '#b0b0b0' : '#505050'
+        }
+
+        // Low-confidence safety: if label ended up unsaturated AND confidence < 0.75
+        // → clean monochrome pass (looks professional for any business)
+        const labelSat = colorSaturation(labelColor)
+        if (labelSat < 0.1 && aiColors.confidence < 0.75 && !bestCSSAccent) {
+          const bgLum = hexLuminance(bg)
+          labelColor = bgLum < 0.3 ? '#999999' : '#666666'
+          log(`Low confidence (${aiColors.confidence}) + unsaturated label → clean monochrome`)
         }
 
         const logoContrast = checkLogoContrast(bg, logoColor)
