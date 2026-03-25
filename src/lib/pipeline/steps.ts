@@ -73,8 +73,8 @@ export const PIPELINE_STEPS: PipelineStepDefinition[] = [
     name: 'Pass Generation',
     description: 'Generiert Apple .pkpass + Google Wallet Save URL',
     phase: 5,
-    status: 'not_built',
-    endpoint: null,
+    status: 'available',
+    endpoint: '/api/pipeline/run-step',
     dependsOn: ['logo', 'colors', 'strip'],
   },
   {

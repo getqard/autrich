@@ -73,10 +73,24 @@ const SUBJECTS = {
   yogastudio: 'Yoga mat, zen space',
   tierhandlung: 'Pet shop, cute animals',
   reinigung: 'Clean garments on hangers',
+  tuerkisch: 'Turkish grilled kebab plate, pide bread',
+  asiatisch: 'Asian wok noodles, chopsticks, steam',
+  griechisch: 'Greek gyros plate, feta, olives',
+  mexikanisch: 'Mexican tacos, nachos, guacamole',
+  indisch: 'Indian curry, naan bread, spices',
+  bar: 'Cocktail glasses, bar counter, bottles',
+  brunch: 'Brunch plate, avocado toast, eggs',
+  bierbar: 'Craft beer glasses, tap handle, hops',
+  apotheke: 'Pharmacy, medicine bottles, health products',
+  autowerkstatt: 'Car repair garage, tools, engine',
+  handyladen: 'Smartphone screens, phone repair tools',
+  massage: 'Massage table, hot stones, candles',
+  hundepflege: 'Dog grooming, cute dog, grooming tools',
+  fahrradladen: 'Bicycles, bike workshop, tools',
   generic: 'Abstract premium atmospheric scene, bokeh lights, dramatic shadows, luxury textures',
 }
 
-const FOOD = new Set(['doener','cafe','pizzeria','baeckerei','restaurant','sushi','burger','eisdiele','imbiss'])
+const FOOD = new Set(['doener','cafe','pizzeria','baeckerei','restaurant','sushi','burger','eisdiele','imbiss','tuerkisch','asiatisch','griechisch','mexikanisch','indisch','brunch','bierbar'])
 
 const NAMES = {
   doener:'Döner/Kebab', barber:'Barber/Friseur', cafe:'Café', pizzeria:'Pizzeria',
@@ -85,7 +99,12 @@ const NAMES = {
   waschanlage:'Autowaschanlage', eisdiele:'Eisdiele', sushi:'Sushi Restaurant',
   burger:'Burger Restaurant', blumenladen:'Blumenladen', imbiss:'Imbiss/Snackbar',
   tattoo:'Tattoo Studio', yogastudio:'Yoga/Pilates Studio', tierhandlung:'Tierhandlung',
-  reinigung:'Textilreinigung', generic:'Generic',
+  reinigung:'Textilreinigung', tuerkisch:'Türkisches Restaurant', asiatisch:'Asiatisches Restaurant',
+  griechisch:'Griechisches Restaurant', mexikanisch:'Mexikanisches Restaurant',
+  indisch:'Indisches Restaurant', bar:'Bar/Cocktailbar', brunch:'Frühstück/Brunch',
+  bierbar:'Craft Beer/Biergarten', apotheke:'Apotheke', autowerkstatt:'Autowerkstatt',
+  handyladen:'Handyladen/Reparatur', massage:'Massage/Physiotherapie',
+  hundepflege:'Hundesalon/Hundepflege', fahrradladen:'Fahrradladen/Werkstatt', generic:'Generic',
 }
 
 // ─── Prompt Builder ─────────────────────────────────────────────
