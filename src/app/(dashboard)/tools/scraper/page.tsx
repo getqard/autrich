@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   Globe, ArrowLeft, Loader2, CheckCircle, XCircle,
   AlertTriangle, Clock, Share2, FileText, Palette,
-  Image, ChevronDown, ChevronUp,
+  Image, ChevronDown, ChevronUp, Wallet, Download, ExternalLink,
 } from 'lucide-react'
 
 type LogoCandidate = {
@@ -78,6 +78,48 @@ export default function ScraperPage() {
   const [result, setResult] = useState<ScrapeResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showPalette, setShowPalette] = useState(false)
+  const [generatingPass, setGeneratingPass] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [passResult, setPassResult] = useState<Record<string, any> | null>(null)
+  const [passError, setPassError] = useState<string | null>(null)
+
+  async function handleGeneratePass() {
+    if (!result?.enrichmentPreview) return
+    setGeneratingPass(true)
+    setPassResult(null)
+    setPassError(null)
+
+    const ep = result.enrichmentPreview
+    const sd = result.structuredData as Record<string, unknown> || {}
+
+    try {
+      const res = await fetch('/api/tools/generate-demo-pass', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          business_name: result.title || url.replace(/https?:\/\/(www\.)?/, '').split('/')[0],
+          url: result.finalUrl || url,
+          logo_base64: ep.logo?.base64 || null,
+          background_color: ep.passPreview?.bg || '#1a1a2e',
+          text_color: ep.passPreview?.text || '#ffffff',
+          label_color: ep.passPreview?.label || '#999999',
+          industry_slug: ep.industry?.slug || null,
+          gmaps_category: gmapsCategory || null,
+          address: sd.address as string || null,
+          phone: sd.telephone as string || null,
+          website: result.finalUrl || url,
+        }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) { setPassError(data.error); return }
+      setPassResult(data)
+    } catch {
+      setPassError('Netzwerkfehler')
+    } finally {
+      setGeneratingPass(false)
+    }
+  }
 
   async function handleScrape() {
     if (!url.trim()) return
@@ -640,6 +682,112 @@ export default function ScraperPage() {
               </div>
             </div>
           </div>
+
+          {/* ─── Pass Generation ─────────────────────────────── */}
+          {ep && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Wallet size={18} className="text-zinc-400" />
+              <h3 className="font-semibold text-sm">Demo-Pass generieren</h3>
+            </div>
+
+            {/* Preview of what will be generated */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-xs">
+              <div>
+                <span className="text-zinc-500">Business</span>
+                <p className="text-zinc-300 mt-0.5">{result.title || 'Unbekannt'}</p>
+              </div>
+              <div>
+                <span className="text-zinc-500">Branche</span>
+                <p className="text-zinc-300 mt-0.5">{ep.industry?.emoji} {ep.industry?.slug || 'auto-detect'}</p>
+              </div>
+              <div>
+                <span className="text-zinc-500">Farben</span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <div className="w-4 h-4 rounded" style={{ backgroundColor: ep.passPreview?.bg }} />
+                  <span className="text-zinc-300 font-mono">{ep.passPreview?.bg}</span>
+                </div>
+              </div>
+              <div>
+                <span className="text-zinc-500">Prämie</span>
+                <p className="text-zinc-300 mt-0.5">{ep.industry?.defaultReward || 'Auto via AI'}</p>
+              </div>
+            </div>
+
+            <button onClick={handleGeneratePass} disabled={generatingPass}
+              className="px-5 py-2.5 bg-white text-black rounded-lg text-sm font-semibold hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+              {generatingPass ? <Loader2 size={16} className="animate-spin" /> : <Wallet size={16} />}
+              Apple + Google Pass generieren
+            </button>
+
+            {passError && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mt-4">
+                <p className="text-sm text-red-400">{passError}</p>
+              </div>
+            )}
+
+            {passResult && (
+              <div className="mt-4 space-y-3">
+                {/* Industry detected */}
+                {passResult.industry && (
+                  <div className="text-xs text-zinc-500">
+                    Branche: <span className="text-zinc-300">
+                      {(passResult.industry as Record<string, string>).emoji} {(passResult.industry as Record<string, string>).slug}
+                    </span>
+                    {' | '}Prämie: <span className="text-zinc-300">{(passResult.industry as Record<string, string>).reward}</span>
+                    {' | '}Stempel: <span className="text-zinc-300">{(passResult.industry as Record<string, string>).stampEmoji}</span>
+                    {' | '}Methode: <span className="text-zinc-300">{(passResult.industry as Record<string, string>).method}</span>
+                  </div>
+                )}
+
+                {/* Apple Result */}
+                {passResult.apple && !(passResult.apple as Record<string, string>).error && (
+                  <div className="bg-green-500/5 border border-green-500/20 rounded-lg p-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-green-400 font-medium">Apple .pkpass</p>
+                      <p className="text-xs text-zinc-500 mt-0.5">
+                        {(((passResult.apple as Record<string, number>).sizeBytes) / 1024).toFixed(0)} KB
+                      </p>
+                    </div>
+                    <a href={(passResult.apple as Record<string, string>).downloadUrl}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-500">
+                      <Download size={14} /> Download .pkpass
+                    </a>
+                  </div>
+                )}
+                {(passResult.apple as Record<string, string>)?.error && (
+                  <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                    <p className="text-sm text-red-400">Apple: {(passResult.apple as Record<string, string>).error}</p>
+                  </div>
+                )}
+
+                {/* Google Result */}
+                {passResult.google && !(passResult.google as Record<string, string>).error && (
+                  <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg p-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-blue-400 font-medium">Google Wallet</p>
+                      <p className="text-xs text-zinc-500 mt-0.5 max-w-xs truncate">
+                        {((passResult.google as Record<string, string>).saveUrl || '').substring(0, 60)}...
+                      </p>
+                    </div>
+                    <a href={(passResult.google as Record<string, string>).saveUrl} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-500">
+                      <ExternalLink size={14} /> Google Wallet
+                    </a>
+                  </div>
+                )}
+                {(passResult.google as Record<string, string>)?.error && (
+                  <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                    <p className="text-sm text-red-400">Google: {(passResult.google as Record<string, string>).error}</p>
+                  </div>
+                )}
+
+                {/* Duration */}
+                <p className="text-[10px] text-zinc-600">{passResult.durationMs as number}ms</p>
+              </div>
+            )}
+            </div>
+          )}
         </div>
       )}
     </div>
