@@ -62,6 +62,21 @@ export const INDUSTRY_PROMPT_CATEGORY: Record<string, PromptCategory> = {
   blumenladen: 'retail',
   tierhandlung: 'retail',
   shisha: 'retail',
+  // Erweiterte Branchen
+  tuerkisch: 'food',
+  asiatisch: 'food',
+  griechisch: 'food',
+  mexikanisch: 'food',
+  indisch: 'food',
+  bar: 'service',
+  brunch: 'food',
+  bierbar: 'food',
+  apotheke: 'service',
+  autowerkstatt: 'service',
+  handyladen: 'service',
+  massage: 'service',
+  hundepflege: 'retail',
+  fahrradladen: 'service',
 }
 
 // ─── Accent Family Detection ────────────────────────────────────
