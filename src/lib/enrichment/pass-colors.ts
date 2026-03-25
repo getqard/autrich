@@ -212,11 +212,19 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
 
         let labelColor: string
 
-        // CASE 1: Logo is monochrome AND AI label came from logo palette
-        // → Don't trust logo-derived gold/color, use CSS accent instead
-        if (logoIsMonochrome && labelFromLogoPalette && bestCSSAccent) {
-          labelColor = ensureLabelContrast(bestCSSAccent.hex, bg)
-          log(`Logo monochrome + label from palette → CSS accent ${bestCSSAccent.hex} (${bestCSSAccent.source})`)
+        // CASE 1: Logo is monochrome AND CSS has a good saturated accent
+        // → CSS accent is more trustworthy than whatever AI "saw"
+        // (AI might pick gold from tiny elements, shadows, or hallucinate)
+        if (logoIsMonochrome && bestCSSAccent && aiColors.label) {
+          // Only override if AI label is NOT already in CSS (if it IS in CSS, it's legit)
+          const aiLabelInCSS = cssCandidates.some(c => perceptualDistance(c.hex, aiColors.label!) < 40 && c.confidence >= 0.50)
+          if (!aiLabelInCSS) {
+            labelColor = ensureLabelContrast(bestCSSAccent.hex, bg)
+            log(`Logo monochrome + AI label ${aiColors.label} not in CSS → CSS accent ${bestCSSAccent.hex} (${bestCSSAccent.source})`)
+          } else {
+            labelColor = ensureLabelContrast(aiColors.label, bg)
+            log(`Logo monochrome but AI label ${aiColors.label} confirmed in CSS → keeping`)
+          }
 
         // CASE 2: AI has a label and it exists in CSS → trust it
         } else if (aiColors.label) {
