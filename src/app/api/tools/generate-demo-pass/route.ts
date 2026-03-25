@@ -176,15 +176,20 @@ export async function POST(request: NextRequest) {
 
       const supabase = createServiceClient()
       const pkpassPath = `${serial}.pkpass`
-      await supabase.storage.from('passes').upload(pkpassPath, appleBuffer, {
+      const { error: uploadErr } = await supabase.storage.from('passes').upload(pkpassPath, appleBuffer, {
         contentType: 'application/vnd.apple.pkpass',
         upsert: true,
       })
 
-      result.apple = {
-        serial,
-        downloadUrl: `/api/passes/${serial}`,
-        sizeBytes: appleBuffer.length,
+      if (uploadErr) {
+        console.error(`[Demo Pass] .pkpass upload failed:`, uploadErr)
+        result.apple = { error: `Upload failed: ${uploadErr.message}`, serial }
+      } else {
+        result.apple = {
+          serial,
+          downloadUrl: `/api/passes/${serial}`,
+          sizeBytes: appleBuffer.length,
+        }
       }
     } catch (err) {
       result.apple = { error: err instanceof Error ? err.message : 'Apple pass generation failed' }
