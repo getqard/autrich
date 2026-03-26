@@ -83,14 +83,35 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
           style={{ backgroundColor: labelColor, opacity: 0.03 }} />
       </div>
 
-      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen px-5 py-10">
+      <div className="relative z-10 flex flex-col items-center px-5 py-10">
 
-        {/* Layout: side-by-side on desktop, stacked on mobile */}
+        {/* ═══ HEADER: Logo + Name — always centered on top ═══ */}
+        <div className="animate-fade-in flex flex-col items-center mb-8 mt-6">
+          {hasRealLogo && (
+            <div className="w-16 h-16 rounded-2xl shadow-lg overflow-hidden mb-3 bg-white/5 border border-white/10">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={lead.logo_url!} alt="" className="w-full h-full object-contain p-1.5" />
+            </div>
+          )}
+          <h1 className="text-xl font-bold text-center">{shortName}</h1>
+        </div>
+
+        {/* ═══ HEADLINE — centered ═══ */}
+        <div className="animate-fade-in text-center mb-8 max-w-lg" style={{ animationDelay: '0.15s', animationFillMode: 'both' }}>
+          <h2 className="text-2xl md:text-3xl font-bold mb-2">
+            Stempelkarte ohne App.
+          </h2>
+          <p className="text-white/50 text-sm md:text-base">
+            Direkt in der <span className="text-white/80 font-semibold">Apple Wallet</span> — deine Kunden haben sie immer dabei. Kein Download, kein Aufwand.
+          </p>
+        </div>
+
+        {/* ═══ MAIN: Mockup + QR/Buttons side by side on desktop ═══ */}
         <div className={`w-full max-w-4xl ${isDesktop ? 'flex items-center gap-12 justify-center' : 'flex flex-col items-center'}`}>
 
-          {/* ═══ LEFT: WALLET PASS MOCKUP ═══ */}
+          {/* WALLET PASS MOCKUP */}
           <div className="animate-slide-up shrink-0 mb-8 lg:mb-0">
-            <div className="w-[320px] rounded-[20px] overflow-hidden shadow-2xl border border-white/10"
+            <div className="w-[300px] rounded-[20px] overflow-hidden shadow-2xl border border-white/10"
               style={{ backgroundColor: bgColor }}>
 
               {/* Header: Logo + Name (right side optional) */}
@@ -167,30 +188,8 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
             </div>
           </div>
 
-          {/* ═══ RIGHT SIDE ═══ */}
+          {/* ═══ RIGHT SIDE: QR + Buttons ═══ */}
           <div className="flex flex-col items-center max-w-sm">
-
-            {/* Logo + Short Name */}
-            <div className="animate-fade-in flex items-center gap-3 mb-5" style={{ animationDelay: '0.1s', animationFillMode: 'both' }}>
-              {hasRealLogo && (
-                <div className="w-12 h-12 rounded-xl shadow-lg overflow-hidden bg-white/5 border border-white/10">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={lead.logo_url!} alt="" className="w-full h-full object-contain p-1" />
-                </div>
-              )}
-              <span className="text-lg font-bold">{shortName}</span>
-            </div>
-
-            {/* Headline */}
-            <div className="animate-fade-in text-center mb-6" style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
-              <h2 className="text-xl font-bold mb-1.5">
-                Deine Kunden. Deine Wallet.
-              </h2>
-              <p className="text-white/40 text-sm">
-                Digitale Stempelkarte direkt in der <span className="text-white/70 font-semibold">Apple Wallet</span>.
-              </p>
-              <p className="text-white/25 text-xs mt-1">Keine App. Kostenlos. Sofort einsatzbereit.</p>
-            </div>
 
             {/* QR (Desktop) */}
             {isDesktop && (
@@ -237,21 +236,25 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
               </div>
             </div>
 
-            {/* Benefits — written for the business owner */}
-            <div className="mt-10 space-y-4 w-full">
-              {[
-                { icon: '📲', text: 'Erreiche deine Kunden per Push-Nachricht — direkt auf dem Sperrbildschirm' },
-                { icon: '📍', text: 'Kunden in der Nähe werden automatisch an deinen Laden erinnert' },
-                { icon: '🔄', text: 'Kunden kommen öfter wieder — durch digitale Stempel statt Papierkarten' },
-                { icon: '🎁', text: `Deine Kunden sammeln Stempel für: ${reward}` },
-              ].map((b, i) => (
-                <div key={i} className="animate-benefit flex items-start gap-3 text-sm"
-                  style={{ animationDelay: `${0.6 + i * 0.1}s`, animationFillMode: 'both' }}>
-                  <span className="text-lg shrink-0 mt-0.5">{b.icon}</span>
-                  <span className="text-white/45">{b.text}</span>
-                </div>
-              ))}
-            </div>
+          </div>
+        </div>
+
+        {/* ═══ BENEFITS — centered grid, below main content ═══ */}
+        <div className="mt-12 max-w-md mx-auto w-full">
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { icon: '📲', title: 'Push aufs Handy', text: 'Direkt auf dem Sperrbildschirm' },
+              { icon: '📍', title: 'GPS-Reminder', text: 'Kunden in der Nähe anlocken' },
+              { icon: '⚡', title: 'Ohne App-Download', text: 'Nahtlos in Apple & Google Wallet' },
+              { icon: '🔄', title: 'Mehr Stammkunden', text: 'Digital statt Papierstempel' },
+            ].map((b, i) => (
+              <div key={i} className="animate-benefit text-center p-4 rounded-xl border border-white/5 bg-white/[0.02]"
+                style={{ animationDelay: `${0.6 + i * 0.1}s`, animationFillMode: 'both' }}>
+                <span className="text-2xl">{b.icon}</span>
+                <p className="text-white/70 text-xs font-semibold mt-2">{b.title}</p>
+                <p className="text-white/30 text-[10px] mt-0.5">{b.text}</p>
+              </div>
+            ))}
           </div>
         </div>
 
