@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { headers } from 'next/headers'
 import { createServiceClient } from '@/lib/supabase/server'
 import DownloadClient from './download-client'
+import GpsSection from './gps-section'
 
 export const dynamic = 'force-dynamic'
 
@@ -254,6 +255,14 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
             </div>
           </div>
         </div>
+
+        {/* GPS Geofencing Section */}
+        <GpsSection
+          businessName={lead.business_name}
+          logoUrl={hasRealLogo ? lead.logo_url : null}
+          labelColor={labelColor}
+        />
+
       </div>
 
       <style>{`

@@ -177,31 +177,36 @@ export async function POST(request: NextRequest) {
           pickedUrl = nextBest?.url || null
         }
 
-        // Override: if another candidate has the business name in URL → prefer it
-        console.log(`[Scrape Logo] nameWordsNorm: ${JSON.stringify(nameWordsNorm)}, nameWordsGerm: ${JSON.stringify(nameWordsGerm)}`)
-        console.log(`[Scrape Logo] bestLogo: ${pickedUrl?.substring(0, 70)}, matchCount: ${pickedUrl ? getNameMatchCount(pickedUrl) : 'n/a'}`)
-
+        // Override: if another candidate has the business name in FILENAME → prefer it
         if (pickedUrl && nameWordsNorm.length >= 1) {
-          const bestMatchCount = getNameMatchCount(pickedUrl)
+          // Extract only the filename part (not domain) for matching
+          const getFilename = (u: string) => {
+            try { return decodeURIComponent(new URL(u).pathname.split('/').pop() || '') } catch { return u }
+          }
+          const getFilenameMatchCount = (u: string): number => {
+            const fn = getFilename(u)
+            const fnNorm = normalize(fn)
+            const fnGerm = germanize(fn)
+            let matches = 0
+            for (const word of nameWordsNorm) {
+              if (fnNorm.includes(word) || fnGerm.includes(word)) matches++
+            }
+            for (const word of nameWordsGerm) {
+              if (fnNorm.includes(word) || fnGerm.includes(word)) matches++
+            }
+            return Math.min(matches, nameWordsNorm.length)
+          }
 
-          // Check ALL candidates for name matches
-          const allWithMatches = result.logoCandidates
+          const bestMatchCount = getFilenameMatchCount(pickedUrl)
+          const betterCandidate = result.logoCandidates
             .filter(c => !isThirdParty(c.url) && c.score >= 40)
-            .map(c => ({ ...c, nameMatches: getNameMatchCount(c.url) }))
-
-          allWithMatches.filter(c => c.nameMatches > 0).forEach(c => {
-            console.log(`[Scrape Logo] Candidate: ${c.url.substring(0, 70)} → ${c.nameMatches} matches`)
-          })
-
-          const betterCandidate = allWithMatches
+            .map(c => ({ ...c, nameMatches: getFilenameMatchCount(c.url) }))
             .filter(c => c.nameMatches >= 2 && c.nameMatches > bestMatchCount)
             .sort((a, b) => b.nameMatches - a.nameMatches || b.score - a.score)[0]
 
           if (betterCandidate) {
-            console.log(`[Scrape Logo] ✓ Override: "${betterCandidate.url.substring(0, 70)}" (${betterCandidate.nameMatches} matches) beats bestLogo (${bestMatchCount} matches)`)
+            console.log(`[Scrape] Logo override: ${getFilename(betterCandidate.url)} (${betterCandidate.nameMatches} name matches)`)
             pickedUrl = betterCandidate.url
-          } else {
-            console.log(`[Scrape Logo] No better candidate found, keeping bestLogo`)
           }
         }
 
