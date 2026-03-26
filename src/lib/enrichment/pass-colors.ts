@@ -193,102 +193,45 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         const bg = aiColors.background
         const textColor = deriveTextColor(bg)
 
-        // Check if logo is monochrome (white/black/gray)
-        const logoIsMonochrome = !logoColor || logoColor.saturation < 0.15
-
-        // Check if AI label came from logo palette (not from the website itself)
-        const labelFromLogoPalette = aiColors.label && palette && (
-          perceptualDistance(aiColors.label, palette.dominant || '#000') < 30 ||
-          perceptualDistance(aiColors.label, palette.accent || '#000') < 30
-        )
-
-        // Framework detection: color blacklist + source pattern blacklist
-        const FRAMEWORK_COLORS = ['#5bc0de', '#f0ad4e', '#5cb85c', '#d9534f', '#69727d', '#0075ff']
-        const FRAMEWORK_SOURCE_PATTERNS = [
-          'library', 'plugin', 'widget', 'preloader', 'uicore',
-          'button-info', 'button-warning', 'button-success', 'button-danger',
-          'page-transition', 'checkbox', 'wp-block-button',
-        ]
-        const isFrameworkDefault = (hex: string, source: string) => {
-          if (FRAMEWORK_COLORS.some(fw => perceptualDistance(hex, fw) < 20)) return true
-          const srcLower = source.toLowerCase()
-          if (FRAMEWORK_SOURCE_PATTERNS.some(p => srcLower.includes(p))) return true
-          return false
-        }
-
-        // Find CSS accent: saturated, not a framework default, good contrast
-        const trustworthyCSSAccent = cssCandidates
-          .filter(c => colorSaturation(c.hex) >= 0.30 && c.confidence >= 0.55 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkDefault(c.hex, c.source))
-          .sort((a, b) => (colorSaturation(b.hex) * b.confidence) - (colorSaturation(a.hex) * a.confidence))[0]
-
-        // Broader CSS accent for general fallback (lower bar)
-        const anyCSSAccent = cssCandidates
-          .filter(c => colorSaturation(c.hex) >= 0.25 && c.confidence >= 0.50 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkDefault(c.hex, c.source))
-          .sort((a, b) => (colorSaturation(b.hex) * b.confidence) - (colorSaturation(a.hex) * a.confidence))[0]
-
-        // Check if website is truly monochrome — no non-framework saturated CSS colors
-        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2 && c.confidence >= 0.55 && !isFrameworkDefault(c.hex, c.source))
-
+        // Simple approach: check if AI label is backed by CSS
+        // If not → confidence decides: high = deriveLabelFromCSS, low = monochrome gray
         let labelColor: string
 
-        // CASE 1: Logo monochrome + TRUSTWORTHY CSS brand accent exists + AI label NOT in CSS
-        // Only override AI when CSS source is clearly a brand element (not a framework button)
-        if (logoIsMonochrome && trustworthyCSSAccent && aiColors.label) {
-          const aiLabelInCSS = cssCandidates.some(c => perceptualDistance(c.hex, aiColors.label!) < 40 && c.confidence >= 0.50)
-          if (!aiLabelInCSS) {
-            labelColor = ensureLabelContrast(trustworthyCSSAccent.hex, bg)
-            log(`Logo monochrome + AI label ${aiColors.label} not in CSS → trusted CSS accent ${trustworthyCSSAccent.hex} (${trustworthyCSSAccent.source})`)
-          } else {
-            labelColor = ensureLabelContrast(aiColors.label, bg)
-            log(`Logo monochrome but AI label ${aiColors.label} confirmed in CSS → keeping`)
-          }
-
-        // CASE 2: AI has a label and it exists in CSS → trust it
-        } else if (aiColors.label) {
+        if (aiColors.label) {
           const maxDist = aiColors.confidence >= 0.85 ? 80 : 60
           const existsInCSS = cssCandidates.some(c => perceptualDistance(c.hex, aiColors.label!) < maxDist)
 
           if (existsInCSS) {
+            // AI label confirmed by CSS → trust it
             labelColor = ensureLabelContrast(aiColors.label, bg)
-          } else if (isMonochrome) {
-            // Truly monochrome website → neutral gray label
+          } else if (aiColors.confidence >= 0.80) {
+            // High confidence but not in CSS → derive best from CSS
+            labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+            log(`AI label ${aiColors.label} not in CSS but conf=${aiColors.confidence} → CSS-derived: ${labelColor}`)
+          } else {
+            // Low confidence + not in CSS → monochrome gray (safe fallback)
             const bgLum = hexLuminance(bg)
             labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
-            log(`Monochrome website → neutral label ${labelColor}`)
-          } else if (anyCSSAccent) {
-            // AI hallucinated but CSS has a good accent → use it
-            log(`Vision-AI label ${aiColors.label} NOT in CSS → using CSS accent ${anyCSSAccent.hex}`)
-            labelColor = ensureLabelContrast(anyCSSAccent.hex, bg)
-          } else {
-            labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+            log(`AI label ${aiColors.label} not in CSS, low conf=${aiColors.confidence} → monochrome gray`)
           }
 
-        // CASE 3: No AI label
+        // No AI label at all
         } else {
-          if (isMonochrome) {
+          // Try to find label from CSS
+          labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+          if (colorSaturation(labelColor) < 0.1) {
+            // deriveLabelFromCSS gave unsaturated result → clean gray
             const bgLum = hexLuminance(bg)
             labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
-            log(`Monochrome website, no AI label → neutral label ${labelColor}`)
-          } else if (anyCSSAccent) {
-            labelColor = ensureLabelContrast(anyCSSAccent.hex, bg)
-            log(`No AI label → CSS accent ${anyCSSAccent.hex}`)
+            log(`No AI label, CSS-derived unsaturated → monochrome gray`)
           } else {
-            labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
+            log(`No AI label → CSS-derived: ${labelColor}`)
           }
         }
 
         if (labelColor === textColor) {
           const bgLum = hexLuminance(bg)
           labelColor = bgLum < 0.3 ? '#b0b0b0' : '#505050'
-        }
-
-        // Low-confidence safety: if label ended up unsaturated AND confidence < 0.75
-        // → clean monochrome pass (looks professional for any business)
-        const labelSat = colorSaturation(labelColor)
-        if (labelSat < 0.1 && aiColors.confidence < 0.75 && !anyCSSAccent) {
-          const bgLum = hexLuminance(bg)
-          labelColor = bgLum < 0.3 ? '#999999' : '#666666'
-          log(`Low confidence (${aiColors.confidence}) + unsaturated label → clean monochrome`)
         }
 
         const logoContrast = checkLogoContrast(bg, logoColor)
