@@ -264,22 +264,20 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
 
       </div>
 
-      {/* Sticky WhatsApp Button — bottom right */}
+      {/* Sticky WhatsApp Button — round, bottom right */}
       <a href={`https://wa.me/49151533344?text=${encodeURIComponent(`Hallo, ich habe die digitale Treuekarte für ${lead.business_name} gesehen und hätte Interesse!`)}`}
         target="_blank" rel="noopener noreferrer"
-        className="fixed bottom-6 right-6 z-50 flex items-center gap-2 pl-4 pr-5 py-3
-          rounded-full bg-[#25D366] text-white font-semibold text-sm
-          shadow-xl shadow-green-500/30
-          hover:scale-[1.05] active:scale-[0.95] transition-all duration-200 overflow-hidden">
-        {/* Shimmer */}
-        <div className="absolute inset-0 animate-shimmer"
-          style={{ background: 'linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.2) 50%, transparent 60%)', backgroundSize: '200% 100%' }} />
-        {/* Red notification dot */}
-        <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full border-2 border-[#0a0a0a] animate-ping-dot" />
-        <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full border-2 border-[#0a0a0a]" />
+        className="fixed bottom-6 right-6 z-50 w-14 h-14 flex items-center justify-center
+          rounded-full bg-[#25D366]
+          shadow-[0_4px_20px_rgba(37,211,102,0.5)]
+          hover:scale-[1.1] active:scale-[0.9] transition-all duration-200">
+        {/* Red notification dot — ping + solid */}
+        <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+          <span className="relative inline-flex rounded-full h-4 w-4 bg-red-500 border-2 border-[#0a0a0a]" />
+        </span>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/whatsapp.svg" alt="" className="w-5 h-5 relative" />
-        <span className="relative">Kontaktieren</span>
+        <img src="/whatsapp.svg" alt="WhatsApp" className="w-7 h-7" />
       </a>
 
       <style>{`
