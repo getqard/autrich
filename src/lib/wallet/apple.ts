@@ -203,7 +203,7 @@ export async function generateApplePass(input: ApplePassInput): Promise<Buffer> 
   pass.secondaryFields.push({
     key: 'reward',
     label: 'PRÄMIE',
-    value: `${input.reward} 🎁`,
+    value: input.reward,
   })
 
   // Auxiliary: emoji visual (with spaces, like Passify)
