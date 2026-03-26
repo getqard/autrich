@@ -1,33 +1,74 @@
 /**
- * AI Logo Picker — Haiku Vision picks the real business logo
+ * Smart Logo Picker — Rule-based, no AI needed
  *
- * When score-based selection might pick the wrong logo (decorative icons,
- * third-party badges), this uses Vision AI to look at all candidates and
- * pick the one that's actually the business logo.
+ * Picks the real business logo from candidates using smart rules:
+ * 1. Hard-filter all third-party logos (Instagram, TikTok, Uber, etc.)
+ * 2. Prefer favicon/apple-touch-icon (these ARE the business logo 99% of the time)
+ * 3. Prefer URLs containing "logo" in filename
+ * 4. Skip decorative SVGs, generic icons, and photos
  *
- * Cost: ~$0.001 per call (Haiku + thumbnails)
+ * Cost: $0 (no AI call)
  */
 
-import Anthropic from '@anthropic-ai/sdk'
-import sharp from 'sharp'
-
-// Third-party logos/icons that should be filtered out before AI sees them
+// Third-party logos/icons — these are NEVER the business logo
 const THIRD_PARTY_PATTERNS = [
-  'google', 'facebook', 'instagram', 'twitter', 'tiktok', 'youtube',
-  'yelp', 'tripadvisor', 'whatsapp', 'telegram', 'pinterest',
-  'linkedin', 'paypal', 'stripe', 'plugin', 'widget', 'review',
-  'trustpilot', 'capterra', 'g2crowd', 'lieferando', 'uber-logo',
-  'ubereats', 'uber-eats', 'deliveroo', 'wolt', 'doordash',
-  'grubhub', 'just-eat', 'foodora', 'gorillas', 'flink',
-  'insta-logo', 'tiktok-logo', 'fb-logo', 'social',
+  // Social Media
+  'instagram', 'insta-', 'insta_', 'facebook', 'fb-logo', 'fb_logo',
+  'twitter', 'x-logo', 'tiktok', 'tik-tok', 'youtube', 'yt-logo',
+  'pinterest', 'linkedin', 'snapchat', 'whatsapp', 'telegram',
+  'threads',
+  // Delivery Platforms
+  'lieferando', 'uber-logo', 'uber_logo', 'ubereats', 'uber-eats',
+  'deliveroo', 'wolt', 'doordash', 'just-eat', 'justeat',
+  'foodora', 'gorillas', 'flink', 'getir',
+  // Review/Rating
+  'yelp', 'tripadvisor', 'trustpilot', 'capterra', 'g2crowd',
+  'google-review', 'google_review', 'bewertung',
+  // Payment
+  'paypal', 'stripe', 'klarna', 'visa', 'mastercard', 'amex',
+  // Tech/Framework
+  'plugin', 'widget', 'elementor', 'wordpress', 'wp-emoji',
 ]
 
-function isThirdPartyUrl(url: string): boolean {
+function isThirdParty(url: string): boolean {
   const lower = url.toLowerCase()
   return THIRD_PARTY_PATTERNS.some(p => lower.includes(p))
 }
 
-async function fetchThumbnail(url: string): Promise<Buffer | null> {
+// Sources that usually ARE the real logo (high trust)
+function getSourceBonus(source: string, url: string): number {
+  const s = source.toLowerCase()
+  const u = url.toLowerCase()
+
+  // Favicon/apple-touch-icon → almost always the real logo
+  if (s === 'apple-touch-icon') return 50
+  if (s === 'favicon' || u.includes('favicon')) return 40
+
+  // URL contains "logo" → very likely the real logo
+  if (u.includes('logo') && !isThirdParty(url)) return 30
+
+  // Header logo → good but might include social icons
+  if (s === 'header-logo') return 10
+
+  // og:image → often a photo, not a logo
+  if (s === 'og-image') return -20
+
+  // Footer logos → often partner/social icons
+  if (s === 'footer-logo') return -10
+
+  // Inline SVGs → often decorative
+  if (s === 'inline-svg') return -15
+
+  return 0
+}
+
+// Check if URL looks like a photo (not a logo)
+function isLikelyPhoto(url: string): boolean {
+  const lower = url.toLowerCase()
+  return /\b(photo|dsc|img_\d|preview|portfolio|bild|image-\d|hero|banner|slider|bg)\b/.test(lower)
+}
+
+async function fetchAsBuffer(url: string): Promise<Buffer | null> {
   try {
     if (url.startsWith('data:')) {
       const commaIdx = url.indexOf(',')
@@ -37,12 +78,11 @@ async function fetchThumbnail(url: string): Promise<Buffer | null> {
       const buf = header.includes('base64')
         ? Buffer.from(data, 'base64')
         : Buffer.from(decodeURIComponent(data))
-      if (buf.length < 200) return null
-      return buf
+      return buf.length > 200 ? buf : null
     }
 
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 3000)
+    const timeout = setTimeout(() => controller.abort(), 5000)
     const res = await fetch(url, {
       signal: controller.signal,
       headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
@@ -57,123 +97,44 @@ async function fetchThumbnail(url: string): Promise<Buffer | null> {
 }
 
 /**
- * Use Haiku Vision to pick the real business logo from candidates.
- *
- * @param candidates - Logo candidates from the scraper (sorted by score)
- * @param businessName - Name of the business (from GMaps or website title)
- * @returns The best logo candidate, or null if AI can't decide
+ * Pick the best business logo from candidates using smart rules.
+ * No AI needed — deterministic, fast, free.
  */
-export async function aiPickBestLogo(
+export async function pickBestLogo(
   candidates: Array<{ url: string; score: number; source: string }>,
   businessName: string,
 ): Promise<{ url: string; buffer: Buffer; source: string } | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null
-  if (candidates.length < 2) return null
+  if (!candidates.length) return null
 
-  // Filter out third-party logos
-  const filtered = candidates
-    .filter(c => !isThirdPartyUrl(c.url))
-    .filter(c => c.score >= 40)
-    .slice(0, 6) // Max 6 to keep API cost low
+  // Score each candidate
+  const scored = candidates
+    .filter(c => !isThirdParty(c.url))
+    .filter(c => !isLikelyPhoto(c.url))
+    .filter(c => c.score >= 25)
+    .map(c => ({
+      ...c,
+      finalScore: c.score + getSourceBonus(c.source, c.url),
+    }))
+    .sort((a, b) => b.finalScore - a.finalScore)
 
-  if (filtered.length < 2) {
-    // Only 1 non-third-party candidate — use it directly
-    if (filtered.length === 1) {
-      const buf = await fetchThumbnail(filtered[0].url)
-      if (buf) return { url: filtered[0].url, buffer: buf, source: filtered[0].source }
-    }
-    return null
-  }
+  if (scored.length === 0) return null
 
-  // Download + create thumbnails
-  const thumbnails = await Promise.all(
-    filtered.map(async (c, i) => {
-      try {
-        const buf = await fetchThumbnail(c.url)
-        if (!buf) return null
-        const thumb = await sharp(buf)
-          .resize(128, 128, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
-          .png()
-          .toBuffer()
-        return { index: i, buffer: buf, thumb }
-      } catch {
-        return null
-      }
-    })
-  )
-
-  const valid = thumbnails.filter((t): t is { index: number; buffer: Buffer; thumb: Buffer } => t !== null)
-  if (valid.length < 2) {
-    // Only 1 valid — return it
-    if (valid.length === 1) {
-      const c = filtered[valid[0].index]
-      return { url: c.url, buffer: valid[0].buffer, source: c.source }
-    }
-    return null
-  }
-
-  // Build vision message
-  const contentBlocks: Anthropic.ContentBlockParam[] = []
-  for (let i = 0; i < valid.length; i++) {
-    contentBlocks.push({ type: 'text', text: `Bild ${i + 1}:` })
-    contentBlocks.push({
-      type: 'image',
-      source: { type: 'base64', media_type: 'image/png', data: valid[i].thumb.toString('base64') },
-    })
-  }
-
-  contentBlocks.push({
-    type: 'text',
-    text: [
-      `Das Geschäft heißt "${businessName}".`,
-      `Welches Bild (1-${valid.length}) ist das echte Logo dieses Geschäfts?`,
-      '',
-      'Regeln:',
-      '- Wähle das Logo das den Geschäftsnamen oder die Marke darstellt',
-      '- NICHT: Social Media Icons, Lieferdienst-Logos, dekorative Symbole',
-      '- Das Favicon/App-Icon ist oft eine gute Wahl',
-      '- Wenn keins passt: {"pick": 0}',
-      '',
-      'Antworte NUR mit JSON: {"pick": 2, "reason": "kurze Begründung"}',
-    ].join('\n'),
+  console.log(`[Logo Picker] ${scored.length} candidates after filtering (from ${candidates.length}):`)
+  scored.slice(0, 5).forEach((c, i) => {
+    console.log(`  ${i + 1}. ${c.source} score=${c.finalScore} (base=${c.score}, bonus=${c.finalScore - c.score}) ${c.url.substring(0, 70)}`)
   })
 
-  try {
-    const client = new Anthropic()
-    const apiAbort = new AbortController()
-    const apiTimeout = setTimeout(() => apiAbort.abort(), 10000)
-
-    const response = await client.messages.create(
-      {
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 80,
-        messages: [{ role: 'user', content: contentBlocks }],
-      },
-      { signal: apiAbort.signal }
-    )
-    clearTimeout(apiTimeout)
-
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map(b => b.text)
-      .join('')
-
-    const jsonMatch = text.match(/\{[^}]+\}/)
-    if (!jsonMatch) return null
-
-    const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>
-    const pick = typeof parsed.pick === 'number' ? parsed.pick : 0
-    if (pick < 1 || pick > valid.length) return null
-
-    const chosen = valid[pick - 1]
-    const source = filtered[chosen.index].source
-    const url = filtered[chosen.index].url
-
-    console.log(`[Logo AI] Picked logo ${pick}: ${source} — ${(parsed.reason as string) || ''}`)
-
-    return { url, buffer: chosen.buffer, source }
-  } catch (err) {
-    console.error('[Logo AI] Failed:', err instanceof Error ? err.message : err)
-    return null
+  // Try each in order until we get a valid buffer
+  for (const candidate of scored.slice(0, 5)) {
+    const buf = await fetchAsBuffer(candidate.url)
+    if (buf && buf.length > 500) {
+      console.log(`[Logo Picker] Selected: ${candidate.source} (score=${candidate.finalScore}) for "${businessName}"`)
+      return { url: candidate.url, buffer: buf, source: candidate.source }
+    }
   }
+
+  return null
 }
+
+// Keep the old export name for backwards compat
+export const aiPickBestLogo = pickBestLogo
