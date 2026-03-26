@@ -205,9 +205,15 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
           return FRAMEWORK_PATTERNS.some(p => lower.includes(p))
         }
 
-        // Find a REAL brand accent: saturated, not framework, decent confidence
+        // Find a REAL brand accent: only from css-var: or css-rule: (reliable sources)
         const realBrandAccent = cssCandidates
-          .filter(c => colorSaturation(c.hex) >= 0.25 && c.confidence >= 0.50 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkSource(c.source))
+          .filter(c =>
+            colorSaturation(c.hex) >= 0.25 &&
+            c.confidence >= 0.50 &&
+            wcagContrastRatio(c.hex, bg) >= 2.0 &&
+            (c.source.startsWith('css-var:') || c.source.startsWith('css-rule:')) &&
+            !isFrameworkSource(c.source)
+          )
           .sort((a, b) => (colorSaturation(b.hex) * b.confidence) - (colorSaturation(a.hex) * a.confidence))[0]
 
         let labelColor: string
