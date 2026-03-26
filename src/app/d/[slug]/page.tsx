@@ -178,8 +178,11 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
           <div className="flex flex-col items-center max-w-sm">
 
             <div className="animate-fade-in text-center mb-8" style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
-              <h2 className="text-2xl font-bold mb-2">Deine digitale Stempelkarte</h2>
-              <p className="text-white/40 text-sm">Jetzt kostenlos zur Wallet hinzufügen</p>
+              <h2 className="text-2xl font-bold mb-2">Deine digitale Treuekarte</h2>
+              <p className="text-white/40 text-sm">
+                Jetzt kostenlos in deine <span className="text-white/70 font-medium">Apple Wallet</span> hinzufügen
+              </p>
+              <p className="text-white/25 text-xs mt-1">Immer dabei. Direkt auf deinem iPhone.</p>
             </div>
 
             {/* QR (Desktop) */}
