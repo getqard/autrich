@@ -202,22 +202,32 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
           perceptualDistance(aiColors.label, palette.accent || '#000') < 30
         )
 
-        // Framework default colors that are NOT brand colors (Bootstrap/Elementor defaults)
-        const FRAMEWORK_DEFAULTS = ['#5bc0de', '#f0ad4e', '#5cb85c', '#d9534f', '#69727d', '#0075ff']
-        const isFrameworkDefault = (hex: string) => FRAMEWORK_DEFAULTS.some(fw => perceptualDistance(hex, fw) < 20)
+        // Framework detection: color blacklist + source pattern blacklist
+        const FRAMEWORK_COLORS = ['#5bc0de', '#f0ad4e', '#5cb85c', '#d9534f', '#69727d', '#0075ff']
+        const FRAMEWORK_SOURCE_PATTERNS = [
+          'library', 'plugin', 'widget', 'preloader', 'uicore',
+          'button-info', 'button-warning', 'button-success', 'button-danger',
+          'page-transition', 'checkbox', 'wp-block-button',
+        ]
+        const isFrameworkDefault = (hex: string, source: string) => {
+          if (FRAMEWORK_COLORS.some(fw => perceptualDistance(hex, fw) < 20)) return true
+          const srcLower = source.toLowerCase()
+          if (FRAMEWORK_SOURCE_PATTERNS.some(p => srcLower.includes(p))) return true
+          return false
+        }
 
         // Find CSS accent: saturated, not a framework default, good contrast
         const trustworthyCSSAccent = cssCandidates
-          .filter(c => colorSaturation(c.hex) >= 0.30 && c.confidence >= 0.55 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkDefault(c.hex))
+          .filter(c => colorSaturation(c.hex) >= 0.30 && c.confidence >= 0.55 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkDefault(c.hex, c.source))
           .sort((a, b) => (colorSaturation(b.hex) * b.confidence) - (colorSaturation(a.hex) * a.confidence))[0]
 
         // Broader CSS accent for general fallback (lower bar)
         const anyCSSAccent = cssCandidates
-          .filter(c => colorSaturation(c.hex) >= 0.25 && c.confidence >= 0.50 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkDefault(c.hex))
+          .filter(c => colorSaturation(c.hex) >= 0.25 && c.confidence >= 0.50 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkDefault(c.hex, c.source))
           .sort((a, b) => (colorSaturation(b.hex) * b.confidence) - (colorSaturation(a.hex) * a.confidence))[0]
 
         // Check if website is truly monochrome — no non-framework saturated CSS colors
-        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2 && c.confidence >= 0.55 && !isFrameworkDefault(c.hex))
+        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2 && c.confidence >= 0.55 && !isFrameworkDefault(c.hex, c.source))
 
         let labelColor: string
 
