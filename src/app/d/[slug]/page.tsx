@@ -214,20 +214,22 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
                 isAndroid={isAndroid}
               />
 
-              {/* WhatsApp — directly under wallet buttons with shimmer */}
-              <div className="mt-4 flex justify-center">
+              {/* WhatsApp CTA — box with shimmer button */}
+              <div className="mt-5 border border-white/10 rounded-2xl p-5 bg-white/[0.02] backdrop-blur-sm text-center">
+                <p className="text-white/60 text-sm mb-3">
+                  Interesse? Lass uns kurz sprechen — <span className="text-white/80 font-medium">unverbindlich</span>.
+                </p>
                 <a href={`https://wa.me/49151533344?text=${encodeURIComponent(`Hallo, ich habe die digitale Treuekarte für ${lead.business_name} gesehen und hätte Interesse!`)}`}
                   target="_blank" rel="noopener noreferrer"
-                  className="relative inline-flex items-center justify-center gap-2.5 px-7 py-3
+                  className="relative inline-flex items-center justify-center gap-2.5 px-8 py-3.5
                     rounded-full font-semibold bg-[#25D366] text-white
                     hover:bg-[#20BD5A] hover:scale-[1.02] active:scale-[0.98]
                     transition-all duration-200 shadow-lg shadow-green-500/20 overflow-hidden">
-                  {/* Shimmer sweep loop */}
                   <div className="absolute inset-0 animate-shimmer"
                     style={{ background: 'linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.2) 50%, transparent 60%)', backgroundSize: '200% 100%' }} />
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src="/whatsapp.svg" alt="" className="w-5 h-5 relative" />
-                  <span className="relative">Interesse? Schreib uns</span>
+                  <span className="relative">Per WhatsApp kontaktieren</span>
                 </a>
               </div>
             </div>
