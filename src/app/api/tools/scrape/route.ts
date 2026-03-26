@@ -6,6 +6,7 @@ import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
 import { checkLogoVisibility } from '@/lib/enrichment/logo-contrast-check'
 import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
+import { scrapeImpressum, extractHeadlines, extractAboutPage } from '@/lib/enrichment/impressum'
 import { normalizeDomain } from '@/lib/scraping/domain-utils'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import { INDUSTRIES } from '@/data/industries-seed'
@@ -48,6 +49,46 @@ export async function POST(request: NextRequest) {
     // Skip screenshot for instagram-only URLs
     const isInstagramOnly = result.websiteType === 'instagram-only' || result.websiteType === 'redirect-to-instagram'
     const headerScreenshot = isInstagramOnly ? null : await captureWebsite(url)
+
+    // ─── Impressum + Website Text (non-blocking) ────────────
+    let impressumData: { contactName: string | null; firstName: string | null; lastName: string | null; foundingYear: number | null; source: string | null } = {
+      contactName: null, firstName: null, lastName: null, foundingYear: null, source: null,
+    }
+    let websiteHeadlines = ''
+    let websiteAbout: string | null = null
+
+    if (!isInstagramOnly) {
+      try {
+        // Fetch homepage HTML for impressum/about extraction
+        const baseUrl = result.finalUrl || (url.startsWith('http') ? url : `https://${url}`)
+        const controller = new AbortController()
+        const htmlTimeout = setTimeout(() => controller.abort(), 5000)
+        const htmlRes = await fetch(baseUrl, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+        })
+        clearTimeout(htmlTimeout)
+        const homepageHtml = htmlRes.ok ? await htmlRes.text() : null
+
+        if (!homepageHtml) throw new Error('Could not fetch homepage HTML')
+        const [impressum, about] = await Promise.all([
+          scrapeImpressum(homepageHtml, baseUrl),
+          extractAboutPage(homepageHtml, baseUrl),
+        ])
+        impressumData = impressum
+        websiteAbout = about
+        websiteHeadlines = extractHeadlines(homepageHtml)
+
+        if (impressumData.contactName) {
+          console.log(`[Scrape] Impressum: ${impressumData.contactName} (${impressumData.source})`)
+        }
+        if (impressumData.foundingYear) {
+          console.log(`[Scrape] Founded: ${impressumData.foundingYear}`)
+        }
+      } catch (err) {
+        console.log(`[Scrape] Impressum/About failed (non-fatal): ${err instanceof Error ? err.message : err}`)
+      }
+    }
 
     // ─── Enrichment Preview ─────────────────────────────────
     type EnrichmentLogo = { base64: string; source: string } | null
@@ -382,6 +423,14 @@ export async function POST(request: NextRequest) {
       ...result,
       enrichmentPreview,
       _cache: { hit: false, domain },
+      impressum: impressumData.contactName ? {
+        contactName: impressumData.contactName,
+        firstName: impressumData.firstName,
+        lastName: impressumData.lastName,
+        foundingYear: impressumData.foundingYear,
+      } : null,
+      websiteHeadlines: websiteHeadlines || null,
+      websiteAbout: websiteAbout || null,
     })
   } catch (err) {
     return NextResponse.json(
