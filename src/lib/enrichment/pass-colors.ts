@@ -202,22 +202,22 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
           perceptualDistance(aiColors.label, palette.accent || '#000') < 30
         )
 
-        // Find TRUSTWORTHY CSS accent: must be from brand variables (not framework buttons/library elements)
-        // High confidence (>=0.70) + saturated + good contrast
-        const isBrandSource = (source: string) =>
-          source.includes('var:') || source.includes('theme') || source.includes('brand') ||
-          source.includes('logo') || source.includes('heading') || source.includes('link')
+        // Framework default colors that are NOT brand colors (Bootstrap/Elementor defaults)
+        const FRAMEWORK_DEFAULTS = ['#5bc0de', '#f0ad4e', '#5cb85c', '#d9534f', '#69727d', '#0075ff']
+        const isFrameworkDefault = (hex: string) => FRAMEWORK_DEFAULTS.some(fw => perceptualDistance(hex, fw) < 20)
+
+        // Find CSS accent: saturated, not a framework default, good contrast
         const trustworthyCSSAccent = cssCandidates
-          .filter(c => colorSaturation(c.hex) >= 0.25 && c.confidence >= 0.70 && wcagContrastRatio(c.hex, bg) >= 2.0 && isBrandSource(c.source))
+          .filter(c => colorSaturation(c.hex) >= 0.30 && c.confidence >= 0.55 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkDefault(c.hex))
           .sort((a, b) => (colorSaturation(b.hex) * b.confidence) - (colorSaturation(a.hex) * a.confidence))[0]
 
         // Broader CSS accent for general fallback (lower bar)
         const anyCSSAccent = cssCandidates
-          .filter(c => colorSaturation(c.hex) >= 0.25 && c.confidence >= 0.50 && wcagContrastRatio(c.hex, bg) >= 2.0)
+          .filter(c => colorSaturation(c.hex) >= 0.25 && c.confidence >= 0.50 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkDefault(c.hex))
           .sort((a, b) => (colorSaturation(b.hex) * b.confidence) - (colorSaturation(a.hex) * a.confidence))[0]
 
-        // Check if website is truly monochrome — no saturated CSS colors from trusted sources
-        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2 && c.confidence >= 0.70 && isBrandSource(c.source))
+        // Check if website is truly monochrome — no non-framework saturated CSS colors
+        const isMonochrome = !cssCandidates.some(c => colorSaturation(c.hex) >= 0.2 && c.confidence >= 0.55 && !isFrameworkDefault(c.hex))
 
         let labelColor: string
 
