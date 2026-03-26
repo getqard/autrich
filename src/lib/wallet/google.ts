@@ -145,7 +145,7 @@ export function generateGoogleSaveLink(input: GooglePassInput): GoogleSaveLinkRe
   }
 
   // Loyalty Object (instance)
-  const rewardText = input.rewardEmoji ? `${input.reward} ${input.rewardEmoji}` : input.reward
+  const rewardText = `${input.reward} 🎁`
 
   const textModulesData: Array<{ id: string; header: string; body: string }> = [
     { id: 'stamps', header: 'FORTSCHRITT', body: stampVisual },

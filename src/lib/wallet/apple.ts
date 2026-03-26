@@ -199,14 +199,11 @@ export async function generateApplePass(input: ApplePassInput): Promise<Buffer> 
     value: `${input.currentStamps} von ${input.maxStamps}`,
   })
 
-  // Secondary: reward
-  const rewardText = input.rewardEmoji
-    ? `${input.reward} ${input.rewardEmoji}`
-    : input.reward
+  // Secondary: reward (no industry emoji — would look like extra stamp)
   pass.secondaryFields.push({
     key: 'reward',
     label: 'PRÄMIE',
-    value: rewardText,
+    value: `${input.reward} 🎁`,
   })
 
   // Auxiliary: emoji visual (with spaces, like Passify)
