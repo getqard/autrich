@@ -195,10 +195,11 @@ export async function POST(request: NextRequest) {
       result.apple = { error: err instanceof Error ? err.message : 'Apple pass generation failed' }
     }
 
+    // Logo public URL (needed for Google + Lead save)
+    let logoPublicUrl: string | null = null
+
     // Google Save Link
     try {
-      // Logo public URL: upload base64 to storage for Google
-      let logoPublicUrl: string | null = null
       if (logoBuffer) {
         const supabase = createServiceClient()
         const logoPath = `demo-${serial.substring(0, 8)}-logo.png`
@@ -220,6 +221,60 @@ export async function POST(request: NextRequest) {
       result.google = { saveUrl: googleSaveUrl }
     } catch (err) {
       result.google = { error: err instanceof Error ? err.message : 'Google pass generation failed' }
+    }
+
+    // ─── Save as Lead (for download page) ────────────────────
+    try {
+      const supabase = createServiceClient()
+
+      // Generate slug from business name
+      const slugBase = business_name
+        .toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .substring(0, 60)
+      const slug = `${slugBase}-${serial.substring(0, 6)}`
+
+      // Upsert lead
+      const { error: leadErr } = await supabase.from('leads').insert({
+        business_name,
+        website_url: url || null,
+        email: 'demo@autrich.test',
+        download_page_slug: slug,
+        pass_status: 'ready',
+        pass_serial: serial,
+        pass_auth_token: authToken,
+        apple_pass_url: `/api/passes/${serial}`,
+        google_pass_url: (result.google as Record<string, string>)?.saveUrl || null,
+        dominant_color: background_color,
+        text_color: text_color,
+        label_color: label_color,
+        detected_industry: industrySlug,
+        detected_reward: reward,
+        detected_reward_emoji: rewardEmoji,
+        detected_stamp_emoji: stampEmoji,
+        detected_max_stamps: maxStamps,
+        detected_pass_title: passTitle,
+        logo_url: logoPublicUrl || null,
+        logo_source: logoBuffer ? 'website' : null,
+        strip_image_url: stripPublicUrl || null,
+        phone: phone || null,
+        address: address || null,
+        pipeline_status: 'new',
+      })
+
+      if (!leadErr) {
+        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
+        result.downloadPage = {
+          slug,
+          url: `${baseUrl}/d/${slug}`,
+        }
+      } else {
+        console.error('[Demo Pass] Lead save failed:', leadErr.message)
+      }
+    } catch (err) {
+      console.error('[Demo Pass] Lead save error:', err)
     }
 
     result.durationMs = Date.now() - startTime

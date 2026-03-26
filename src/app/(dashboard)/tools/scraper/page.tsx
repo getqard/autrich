@@ -797,6 +797,20 @@ export default function ScraperPage() {
                   </div>
                 )}
 
+                {/* Download Page Link */}
+                {passResult.downloadPage && (
+                  <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-purple-400 font-medium">Download-Seite</p>
+                      <p className="text-xs text-zinc-500 mt-0.5 font-mono">/d/{(passResult.downloadPage as Record<string, string>).slug}</p>
+                    </div>
+                    <a href={(passResult.downloadPage as Record<string, string>).url} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-500">
+                      <ExternalLink size={14} /> Öffnen
+                    </a>
+                  </div>
+                )}
+
                 {/* Duration */}
                 <p className="text-[10px] text-zinc-600">{passResult.durationMs as number}ms</p>
               </div>
