@@ -214,7 +214,11 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
 
         if (aiColors.label) {
           const maxDist = aiColors.confidence >= 0.85 ? 80 : 60
-          const existsInCSS = cssCandidates.some(c => perceptualDistance(c.hex, aiColors.label!) < maxDist)
+          // Only count RELIABLE CSS sources as confirmation (not catch-all "saturated"/"structural")
+          const existsInCSS = cssCandidates.some(c =>
+            perceptualDistance(c.hex, aiColors.label!) < maxDist &&
+            !c.source.startsWith('css-color:')  // exclude css-color:saturated, css-color:structural
+          )
 
           if (existsInCSS) {
             // AI label confirmed by CSS → trust it
