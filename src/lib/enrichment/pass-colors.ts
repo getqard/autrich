@@ -214,14 +214,23 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
 
         if (aiColors.label) {
           const maxDist = aiColors.confidence >= 0.85 ? 80 : 60
-          // Only count RELIABLE CSS sources as confirmation (not catch-all "saturated"/"structural")
+          // Only count HIGH-QUALITY CSS sources as confirmation
+          // css-var: and css-rule: are intentional brand decisions
+          // css-color:, css-border:, css-svg-fill: are too noisy
           const existsInCSS = cssCandidates.some(c =>
             perceptualDistance(c.hex, aiColors.label!) < maxDist &&
-            !c.source.startsWith('css-color:')  // exclude css-color:saturated, css-color:structural
+            (c.source.startsWith('css-var:') || c.source.startsWith('css-rule:')) &&
+            !isFrameworkSource(c.source)
           )
 
           if (existsInCSS) {
-            // AI label confirmed by CSS → trust it
+            // AI label confirmed by reliable CSS source → trust it
+            const confirmingCSS = cssCandidates.find(c =>
+              perceptualDistance(c.hex, aiColors.label!) < maxDist &&
+              (c.source.startsWith('css-var:') || c.source.startsWith('css-rule:')) &&
+              !isFrameworkSource(c.source)
+            )
+            log(`AI label ${aiColors.label} confirmed by CSS ${confirmingCSS?.hex} (${confirmingCSS?.source})`)
             labelColor = ensureLabelContrast(aiColors.label, bg)
           } else if (realBrandAccent) {
             // AI label not in CSS but real brand accent exists → use it
