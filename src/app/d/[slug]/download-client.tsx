@@ -42,38 +42,41 @@ export default function DownloadClient({ leadId, passSerial, googlePassUrl, phon
   }
 
   return (
-    <div className="w-full space-y-4">
+    <div className="w-full space-y-3">
 
-      {/* Apple Wallet — Official Badge with glow */}
+      {/* Bouncing Arrow (like Passify) */}
+      <div className="flex justify-center animate-bounce">
+        <svg className="w-6 h-6 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+        </svg>
+      </div>
+
+      {/* Apple Wallet — Official Badge + pulse animation */}
       {(isIOS || !isMobile) && passSerial && (
         <button onClick={trackAndDownloadApple} disabled={downloading}
-          className="group relative w-full flex justify-center disabled:opacity-70 transition-transform duration-200
-            hover:scale-[1.03] active:scale-[0.97]">
-          {/* Glow effect */}
-          <div className="absolute inset-0 rounded-xl blur-xl opacity-0 group-hover:opacity-30 transition-opacity duration-500 bg-white" />
-          {/* Pulse ring */}
-          <div className="absolute inset-0 rounded-xl animate-pulse-ring opacity-20 border-2 border-white" />
-          {/* Official Apple Badge SVG */}
+          className="w-full flex items-center justify-center py-3
+            transition-all transform hover:scale-[1.03] active:scale-[0.98]
+            disabled:opacity-50 disabled:cursor-not-allowed animate-pulse-subtle">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/DE_Add_to_Apple_Wallet_RGB_101421.svg"
             alt="Zu Apple Wallet hinzufügen"
-            className="h-14 w-auto relative"
+            className="w-full max-w-[280px] h-auto object-contain"
           />
         </button>
       )}
 
-      {/* Google Wallet — Official Badge */}
+      {/* Google Wallet — Official Badge + pulse animation */}
       {(isAndroid || !isMobile) && googlePassUrl && (
         <button onClick={trackAndDownloadGoogle}
-          className="group relative w-full flex justify-center transition-transform duration-200
-            hover:scale-[1.03] active:scale-[0.97]">
-          <div className="absolute inset-0 rounded-xl blur-xl opacity-0 group-hover:opacity-20 transition-opacity duration-500 bg-white" />
+          className="w-full flex items-center justify-center py-3
+            transition-all transform hover:scale-[1.03] active:scale-[0.98]
+            animate-pulse-subtle" style={{ animationDelay: '1s' }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/de_add_to_google_wallet_add-wallet-badge.svg"
             alt="Zu Google Wallet hinzufügen"
-            className="h-14 w-auto relative"
+            className="w-full max-w-[280px] h-auto object-contain"
           />
         </button>
       )}
@@ -95,12 +98,13 @@ export default function DownloadClient({ leadId, passSerial, googlePassUrl, phon
       )}
 
       <style>{`
-        @keyframes pulseRing {
-          0% { transform: scale(1); opacity: 0.2; }
-          50% { transform: scale(1.05); opacity: 0; }
-          100% { transform: scale(1); opacity: 0.2; }
+        @keyframes pulse-subtle {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.85; transform: scale(1.04); }
         }
-        .animate-pulse-ring { animation: pulseRing 2s ease-in-out infinite; }
+        .animate-pulse-subtle {
+          animation: pulse-subtle 2s ease-in-out infinite;
+        }
       `}</style>
     </div>
   )
