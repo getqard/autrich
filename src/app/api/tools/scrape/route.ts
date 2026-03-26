@@ -128,7 +128,7 @@ export async function POST(request: NextRequest) {
       // Normal website flow
 
       // 1. Website logo — use bestLogo from scraper (score-based)
-      // If bestLogo is a third-party logo (Instagram, TikTok, etc.), skip to next candidate
+      // Then: third-party filter + business-name-in-URL override
       if (result.logoCandidates?.length) {
         const THIRD_PARTY = ['instagram', 'insta-', 'insta_', 'facebook', 'fb-logo', 'tiktok', 'tik-tok',
           'youtube', 'yt-logo', 'whatsapp', 'telegram', 'pinterest', 'linkedin', 'snapchat',
@@ -137,14 +137,59 @@ export async function POST(request: NextRequest) {
           'paypal', 'stripe', 'klarna', 'visa', 'mastercard', 'wp-emoji', 'elementor']
         const isThirdParty = (url: string) => THIRD_PARTY.some(p => url.toLowerCase().includes(p))
 
-        // Pick bestLogo, or next-best if bestLogo is third-party
+        // Normalize text for fuzzy matching (handles umlauts: ö→o AND ö→oe)
+        const normalize = (s: string) => s.toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9]/g, ' ').trim()
+        const germanize = (s: string) => s.toLowerCase()
+          .replace(/ö/g, 'oe').replace(/ä/g, 'ae').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+          .replace(/[^a-z0-9]/g, ' ').trim()
+
+        // Extract significant words (≥3 chars) from business name + title
+        const nameSource = `${business_name || ''} ${result.title || ''}`
+        const nameWordsNorm = normalize(nameSource).split(/\s+/).filter(w => w.length >= 3)
+        const nameWordsGerm = germanize(nameSource).split(/\s+/).filter(w => w.length >= 3)
+
+        // Check if a URL contains business name words
+        const getNameMatchCount = (url: string): number => {
+          const urlNorm = normalize(url)
+          const urlGerm = germanize(url)
+          let matches = 0
+          for (const word of nameWordsNorm) {
+            if (urlNorm.includes(word) || urlGerm.includes(word)) matches++
+          }
+          for (const word of nameWordsGerm) {
+            if (urlNorm.includes(word) || urlGerm.includes(word)) matches++
+          }
+          // Deduplicate (a word might match in both normalized forms)
+          return Math.min(matches, nameWordsNorm.length)
+        }
+
+        // Start with bestLogo
         let pickedUrl = result.bestLogo?.url || null
+
+        // Filter: if bestLogo is third-party → next best
         if (pickedUrl && isThirdParty(pickedUrl)) {
-          console.log(`[Scrape] bestLogo is third-party (${pickedUrl.substring(0, 60)}), finding next...`)
+          console.log(`[Scrape] bestLogo is third-party, finding next...`)
           const nextBest = result.logoCandidates
             .filter(c => !isThirdParty(c.url) && c.score >= 40)
             .sort((a, b) => b.score - a.score)[0]
           pickedUrl = nextBest?.url || null
+        }
+
+        // Override: if another candidate has the business name in URL → prefer it
+        if (pickedUrl && nameWordsNorm.length >= 1) {
+          const bestMatchCount = getNameMatchCount(pickedUrl)
+          const betterCandidate = result.logoCandidates
+            .filter(c => !isThirdParty(c.url) && c.score >= 40)
+            .map(c => ({ ...c, nameMatches: getNameMatchCount(c.url) }))
+            .filter(c => c.nameMatches >= 2 && c.nameMatches > bestMatchCount)
+            .sort((a, b) => b.nameMatches - a.nameMatches || b.score - a.score)[0]
+
+          if (betterCandidate) {
+            console.log(`[Scrape] Business name match: "${betterCandidate.url.substring(0, 60)}" (${betterCandidate.nameMatches} words) beats bestLogo`)
+            pickedUrl = betterCandidate.url
+          }
         }
 
         if (pickedUrl) {
