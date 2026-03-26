@@ -193,8 +193,23 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         const bg = aiColors.background
         const textColor = deriveTextColor(bg)
 
-        // Simple approach: check if AI label is backed by CSS
-        // If not → confidence decides: high = deriveLabelFromCSS, low = monochrome gray
+        // Framework source patterns to exclude
+        const FRAMEWORK_PATTERNS = [
+          'library', 'plugin', 'widget', 'preloader', 'uicore',
+          'button-info', 'button-warning', 'button-success', 'button-danger',
+          'page-transition', 'wp-block-button', 'elementor-button', 'elementor-kit',
+          'structural', 'checkbox',
+        ]
+        const isFrameworkSource = (src: string) => {
+          const lower = src.toLowerCase()
+          return FRAMEWORK_PATTERNS.some(p => lower.includes(p))
+        }
+
+        // Find a REAL brand accent: saturated, not framework, decent confidence
+        const realBrandAccent = cssCandidates
+          .filter(c => colorSaturation(c.hex) >= 0.25 && c.confidence >= 0.50 && wcagContrastRatio(c.hex, bg) >= 2.0 && !isFrameworkSource(c.source))
+          .sort((a, b) => (colorSaturation(b.hex) * b.confidence) - (colorSaturation(a.hex) * a.confidence))[0]
+
         let labelColor: string
 
         if (aiColors.label) {
@@ -204,28 +219,26 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
           if (existsInCSS) {
             // AI label confirmed by CSS → trust it
             labelColor = ensureLabelContrast(aiColors.label, bg)
-          } else if (aiColors.confidence >= 0.80) {
-            // High confidence but not in CSS → derive best from CSS
-            labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
-            log(`AI label ${aiColors.label} not in CSS but conf=${aiColors.confidence} → CSS-derived: ${labelColor}`)
+          } else if (realBrandAccent) {
+            // AI label not in CSS but real brand accent exists → use it
+            labelColor = ensureLabelContrast(realBrandAccent.hex, bg)
+            log(`AI label ${aiColors.label} not in CSS → real brand accent ${realBrandAccent.hex} (${realBrandAccent.source})`)
           } else {
-            // Low confidence + not in CSS → monochrome gray (safe fallback)
+            // No real brand accent at all → monochrome gray
             const bgLum = hexLuminance(bg)
             labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
-            log(`AI label ${aiColors.label} not in CSS, low conf=${aiColors.confidence} → monochrome gray`)
+            log(`AI label ${aiColors.label} not in CSS, no brand accent → monochrome gray`)
           }
 
-        // No AI label at all
+        // No AI label
         } else {
-          // Try to find label from CSS
-          labelColor = deriveLabelFromCSS(cssCandidates, bg, websiteContext)
-          if (colorSaturation(labelColor) < 0.1) {
-            // deriveLabelFromCSS gave unsaturated result → clean gray
+          if (realBrandAccent) {
+            labelColor = ensureLabelContrast(realBrandAccent.hex, bg)
+            log(`No AI label → real brand accent ${realBrandAccent.hex}`)
+          } else {
             const bgLum = hexLuminance(bg)
             labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
-            log(`No AI label, CSS-derived unsaturated → monochrome gray`)
-          } else {
-            log(`No AI label → CSS-derived: ${labelColor}`)
+            log(`No AI label, no brand accent → monochrome gray`)
           }
         }
 
