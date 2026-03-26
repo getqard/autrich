@@ -6,7 +6,6 @@ import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
 import { checkLogoVisibility } from '@/lib/enrichment/logo-contrast-check'
 import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
-import { aiPickBestLogo } from '@/lib/enrichment/logo-picker-ai'
 import { normalizeDomain } from '@/lib/scraping/domain-utils'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import { INDUSTRIES } from '@/data/industries-seed'
@@ -128,22 +127,25 @@ export async function POST(request: NextRequest) {
 
       // Normal website flow
 
-      // 1. AI Logo Picker — shows all candidates to Haiku, picks the real business logo
-      // Falls back to score-based if AI unavailable
-      if (result.logoCandidates?.length >= 2 && business_name) {
-        try {
-          const aiPick = await aiPickBestLogo(result.logoCandidates, business_name)
-          if (aiPick) {
-            logoBuffer = aiPick.buffer
-            logoSource = 'ai-picked'
-            console.log(`[Scrape] AI picked logo: ${aiPick.source} (${aiPick.url.substring(0, 60)}...)`)
-          }
-        } catch { /* non-fatal, fall through to score-based */ }
-      }
+      // 1. Website logo — use bestLogo from scraper (score-based)
+      // If bestLogo is a third-party logo (Instagram, TikTok, etc.), skip to next candidate
+      if (result.logoCandidates?.length) {
+        const THIRD_PARTY = ['instagram', 'insta-', 'insta_', 'facebook', 'fb-logo', 'tiktok', 'tik-tok',
+          'youtube', 'yt-logo', 'whatsapp', 'telegram', 'pinterest', 'linkedin', 'snapchat',
+          'lieferando', 'uber-logo', 'uber_logo', 'ubereats', 'deliveroo', 'wolt', 'doordash',
+          'just-eat', 'foodora', 'gorillas', 'flink', 'yelp', 'tripadvisor', 'trustpilot',
+          'paypal', 'stripe', 'klarna', 'visa', 'mastercard', 'wp-emoji', 'elementor']
+        const isThirdParty = (url: string) => THIRD_PARTY.some(p => url.toLowerCase().includes(p))
 
-      // Score-based fallback (if AI didn't pick or unavailable)
-      if (!logoBuffer && result.logoCandidates?.length) {
-        const pickedUrl = result.bestLogo?.url || null
+        // Pick bestLogo, or next-best if bestLogo is third-party
+        let pickedUrl = result.bestLogo?.url || null
+        if (pickedUrl && isThirdParty(pickedUrl)) {
+          console.log(`[Scrape] bestLogo is third-party (${pickedUrl.substring(0, 60)}), finding next...`)
+          const nextBest = result.logoCandidates
+            .filter(c => !isThirdParty(c.url) && c.score >= 40)
+            .sort((a, b) => b.score - a.score)[0]
+          pickedUrl = nextBest?.url || null
+        }
 
         if (pickedUrl) {
           try {
