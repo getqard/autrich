@@ -178,17 +178,30 @@ export async function POST(request: NextRequest) {
         }
 
         // Override: if another candidate has the business name in URL → prefer it
+        console.log(`[Scrape Logo] nameWordsNorm: ${JSON.stringify(nameWordsNorm)}, nameWordsGerm: ${JSON.stringify(nameWordsGerm)}`)
+        console.log(`[Scrape Logo] bestLogo: ${pickedUrl?.substring(0, 70)}, matchCount: ${pickedUrl ? getNameMatchCount(pickedUrl) : 'n/a'}`)
+
         if (pickedUrl && nameWordsNorm.length >= 1) {
           const bestMatchCount = getNameMatchCount(pickedUrl)
-          const betterCandidate = result.logoCandidates
+
+          // Check ALL candidates for name matches
+          const allWithMatches = result.logoCandidates
             .filter(c => !isThirdParty(c.url) && c.score >= 40)
             .map(c => ({ ...c, nameMatches: getNameMatchCount(c.url) }))
+
+          allWithMatches.filter(c => c.nameMatches > 0).forEach(c => {
+            console.log(`[Scrape Logo] Candidate: ${c.url.substring(0, 70)} → ${c.nameMatches} matches`)
+          })
+
+          const betterCandidate = allWithMatches
             .filter(c => c.nameMatches >= 2 && c.nameMatches > bestMatchCount)
             .sort((a, b) => b.nameMatches - a.nameMatches || b.score - a.score)[0]
 
           if (betterCandidate) {
-            console.log(`[Scrape] Business name match: "${betterCandidate.url.substring(0, 60)}" (${betterCandidate.nameMatches} words) beats bestLogo`)
+            console.log(`[Scrape Logo] ✓ Override: "${betterCandidate.url.substring(0, 70)}" (${betterCandidate.nameMatches} matches) beats bestLogo (${bestMatchCount} matches)`)
             pickedUrl = betterCandidate.url
+          } else {
+            console.log(`[Scrape Logo] No better candidate found, keeping bestLogo`)
           }
         }
 
