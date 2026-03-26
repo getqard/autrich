@@ -17,7 +17,6 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
 
   if (!lead) notFound()
 
-  // Pass not ready yet
   if (lead.pass_status !== 'ready') {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white flex items-center justify-center">
@@ -36,7 +35,7 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
   const isAndroid = /Android/i.test(ua)
   const isDesktop = !isIOS && !isAndroid
 
-  // Track visit (fire-and-forget)
+  // Track (fire-and-forget)
   supabase.from('tracking_events').insert({
     lead_id: lead.id,
     event_type: isDesktop ? 'page_visited_desktop' : 'page_visited_mobile',
@@ -58,8 +57,10 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
   const stampEmoji = lead.detected_stamp_emoji || '⭐'
   const currentStamps = 3
   const maxStamps = lead.detected_max_stamps || 10
-  const stampVisual = ((stampEmoji + ' ').repeat(currentStamps) + ('⚪ ').repeat(maxStamps - currentStamps)).trim()
   const reward = lead.detected_reward || 'Überraschung'
+
+  // Stamp dots (filled = small colored circles, empty = gray circles)
+  const stampDots = Array.from({ length: maxStamps }, (_, i) => i < currentStamps)
 
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
   const pageUrl = `${baseUrl}/d/${slug}`
@@ -71,76 +72,133 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
       {/* Animated Background Orbs */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -left-40 w-[500px] h-[500px] rounded-full blur-[120px] animate-float"
-          style={{ backgroundColor: labelColor, opacity: 0.08 }} />
+          style={{ backgroundColor: labelColor, opacity: 0.07 }} />
         <div className="absolute -bottom-40 -right-40 w-[400px] h-[400px] rounded-full blur-[100px] animate-float-delayed"
-          style={{ backgroundColor: bgColor, opacity: 0.06 }} />
+          style={{ backgroundColor: bgColor, opacity: 0.05 }} />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full blur-[150px] animate-float-slow"
+          style={{ backgroundColor: labelColor, opacity: 0.03 }} />
       </div>
 
-      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen px-6 py-12">
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen px-5 py-10">
 
         {/* Logo + Name */}
-        <div className="animate-fade-in flex flex-col items-center mb-8">
+        <div className="animate-fade-in flex flex-col items-center mb-6">
           {hasRealLogo && (
-            <div className="w-16 h-16 rounded-xl shadow-lg overflow-hidden mb-3 bg-white/5 backdrop-blur-sm">
+            <div className="w-14 h-14 rounded-2xl shadow-lg overflow-hidden mb-3 bg-white/5 backdrop-blur-sm border border-white/10">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={lead.logo_url!} alt="" className="w-full h-full object-contain" />
+              <img src={lead.logo_url!} alt="" className="w-full h-full object-contain p-1" />
             </div>
           )}
-          <h1 className="text-2xl font-bold text-center">{lead.business_name}</h1>
+          <h1 className="text-xl font-bold text-center">{lead.business_name}</h1>
         </div>
 
-        {/* Layout: side-by-side on desktop, stacked on mobile */}
-        <div className={`w-full max-w-3xl ${isDesktop ? 'flex items-start gap-12 justify-center' : 'flex flex-col items-center'}`}>
+        {/* Layout */}
+        <div className={`w-full max-w-4xl ${isDesktop ? 'flex items-center gap-16 justify-center' : 'flex flex-col items-center'}`}>
 
-          {/* Pass Preview Card */}
+          {/* ═══ WALLET PASS MOCKUP ═══ */}
           <div className="animate-slide-up mb-8 shrink-0">
-            <div className="rounded-2xl overflow-hidden shadow-2xl w-72 border border-white/10"
+            <div className="w-[320px] rounded-[20px] overflow-hidden shadow-2xl border border-white/10"
               style={{ backgroundColor: bgColor }}>
-              {lead.strip_image_url && (
-                <div className="h-24 bg-cover bg-center opacity-80"
-                  style={{ backgroundImage: `url(${lead.strip_image_url})` }} />
-              )}
-              <div className="p-4 flex items-center gap-3">
-                {hasRealLogo && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={lead.logo_url!} alt="" className="w-8 h-8 rounded-md" />
-                )}
-                <span className="font-semibold text-sm" style={{ color: textColor }}>{lead.business_name}</span>
+
+              {/* Header: Logo + Name (right side optional) */}
+              <div className="px-5 pt-4 pb-2 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  {hasRealLogo && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={lead.logo_url!} alt="" className="w-10 h-10 rounded-lg object-contain" />
+                  )}
+                  <span className="font-semibold text-sm" style={{ color: textColor }}>{lead.business_name}</span>
+                </div>
               </div>
-              <div className="px-4 pb-4">
-                <p className="text-[10px] uppercase tracking-wider" style={{ color: labelColor }}>Deine Stempel</p>
-                <p className="text-2xl font-bold mt-0.5" style={{ color: textColor }}>{currentStamps} von {maxStamps}</p>
-                <p className="mt-3 text-sm tracking-wider">{stampVisual}</p>
-                <p className="text-[10px] uppercase tracking-wider mt-3" style={{ color: labelColor }}>Prämie</p>
-                <p className="text-sm mt-0.5" style={{ color: textColor }}>{reward} 🎁</p>
+
+              {/* Strip Image + Stamp Count Overlay */}
+              <div className="relative h-[130px]">
+                {lead.strip_image_url ? (
+                  <div className="absolute inset-0 bg-cover bg-center"
+                    style={{ backgroundImage: `url(${lead.strip_image_url})` }} />
+                ) : (
+                  <div className="absolute inset-0" style={{ backgroundColor: bgColor }} />
+                )}
+                {/* Gradient overlay for text readability */}
+                <div className="absolute inset-0" style={{
+                  background: `linear-gradient(90deg, ${bgColor} 0%, ${bgColor} 20%, transparent 70%)`
+                }} />
+                {/* Stamp count */}
+                <div className="absolute bottom-4 left-5">
+                  <p className="text-4xl font-bold tracking-tight" style={{ color: textColor }}>
+                    {currentStamps} von {maxStamps}
+                  </p>
+                  <p className="text-[11px] uppercase tracking-wider mt-0.5" style={{ color: labelColor }}>
+                    Deine Stempel
+                  </p>
+                </div>
+              </div>
+
+              {/* Fields Row: Prämie + Fortschritt */}
+              <div className="px-5 py-3 flex items-start justify-between border-t border-white/5">
+                <div>
+                  <p className="text-[9px] uppercase tracking-wider" style={{ color: labelColor }}>Prämie</p>
+                  <p className="text-xs font-medium mt-0.5" style={{ color: textColor }}>{reward} 🎁</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[9px] uppercase tracking-wider" style={{ color: labelColor }}>Fortschritt</p>
+                  <div className="flex items-center gap-1 mt-1">
+                    {stampDots.map((filled, i) => (
+                      <div key={i} className={`w-2.5 h-2.5 rounded-full ${filled ? '' : 'opacity-30'}`}
+                        style={{ backgroundColor: filled ? labelColor : '#888' }} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* QR Section */}
+              <div className="flex justify-center py-6" style={{ backgroundColor: bgColor }}>
+                <div className="bg-white rounded-xl p-3">
+                  <div className="w-[120px] h-[120px] bg-gray-200 rounded flex items-center justify-center">
+                    <svg viewBox="0 0 100 100" className="w-full h-full opacity-20">
+                      <rect x="10" y="10" width="25" height="25" fill="black"/>
+                      <rect x="65" y="10" width="25" height="25" fill="black"/>
+                      <rect x="10" y="65" width="25" height="25" fill="black"/>
+                      <rect x="40" y="40" width="20" height="20" fill="black"/>
+                    </svg>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pagination Dots (decorative) */}
+              <div className="flex justify-center gap-1.5 pb-4">
+                <div className="w-1.5 h-1.5 rounded-full bg-white/80" />
+                <div className="w-1.5 h-1.5 rounded-full bg-white/20" />
+                <div className="w-1.5 h-1.5 rounded-full bg-white/20" />
               </div>
             </div>
           </div>
 
-          {/* Right side */}
-          <div className="flex flex-col items-center">
-            <div className="animate-fade-in text-center mb-6" style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
-              <h2 className="text-xl font-semibold mb-1">Deine digitale Stempelkarte</h2>
-              <p className="text-white/50 text-sm">ist fertig!</p>
+          {/* ═══ RIGHT SIDE ═══ */}
+          <div className="flex flex-col items-center max-w-sm">
+
+            <div className="animate-fade-in text-center mb-8" style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
+              <h2 className="text-2xl font-bold mb-2">Deine digitale Stempelkarte</h2>
+              <p className="text-white/40 text-sm">Jetzt kostenlos zur Wallet hinzufügen</p>
             </div>
 
             {/* QR (Desktop) */}
             {isDesktop && (
-              <div className="animate-fade-in mb-6" style={{ animationDelay: '0.3s', animationFillMode: 'both' }}>
-                <p className="text-white/40 text-xs text-center mb-3">Scanne mit deinem Smartphone:</p>
+              <div className="animate-fade-in mb-8" style={{ animationDelay: '0.3s', animationFillMode: 'both' }}>
+                <p className="text-white/30 text-xs text-center mb-3">Scanne mit deinem Smartphone:</p>
                 <div className="relative">
-                  <div className="absolute inset-0 rounded-3xl blur-xl opacity-15"
+                  <div className="absolute inset-0 rounded-3xl blur-2xl opacity-15"
                     style={{ backgroundColor: labelColor }} />
                   <div className="relative bg-white rounded-3xl p-5 shadow-2xl">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={qrUrl} alt="QR Code" className="w-48 h-48" />
+                    <img src={qrUrl} alt="QR Code" className="w-44 h-44" />
                   </div>
                 </div>
-                <p className="text-white/20 text-[10px] text-center mt-2 font-mono">{slug}</p>
+                <p className="text-white/15 text-[10px] text-center mt-2 font-mono">{slug}</p>
               </div>
             )}
 
-            {/* Buttons */}
+            {/* Wallet Buttons */}
             <div className="animate-fade-in w-full" style={{ animationDelay: '0.4s', animationFillMode: 'both' }}>
               <DownloadClient
                 leadId={lead.id}
@@ -153,17 +211,17 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
             </div>
 
             {/* Benefits */}
-            <div className="mt-8 space-y-3 max-w-xs">
+            <div className="mt-10 space-y-4 w-full">
               {[
-                'Kunden per Push direkt auf dem Sperrbildschirm erreichen',
-                'Mehr Laufkundschaft durch GPS-Erinnerungen in der Nähe',
-                `Deine Prämie: ${reward} 🎁`,
-                'Kostenlos. Keine App nötig.',
-              ].map((benefit, i) => (
-                <div key={i} className="animate-benefit flex items-start gap-2.5 text-sm text-white/60"
-                  style={{ animationDelay: `${0.5 + i * 0.12}s`, animationFillMode: 'both' }}>
-                  <span className="text-green-400 mt-0.5 text-xs">✓</span>
-                  <span>{benefit}</span>
+                { icon: '📲', text: 'Push-Nachrichten direkt auf dem Sperrbildschirm' },
+                { icon: '📍', text: 'GPS-Erinnerung wenn Kunden in der Nähe sind' },
+                { icon: '🎁', text: `Deine Prämie: ${reward}` },
+                { icon: '✨', text: 'Kostenlos. Keine App nötig.' },
+              ].map((b, i) => (
+                <div key={i} className="animate-benefit flex items-center gap-3 text-sm"
+                  style={{ animationDelay: `${0.6 + i * 0.1}s`, animationFillMode: 'both' }}>
+                  <span className="text-lg shrink-0">{b.icon}</span>
+                  <span className="text-white/50">{b.text}</span>
                 </div>
               ))}
             </div>
@@ -174,23 +232,27 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
       <style>{`
         @keyframes float {
           0%, 100% { transform: translateY(0) translateX(0); }
-          33% { transform: translateY(-20px) translateX(10px); }
-          66% { transform: translateY(10px) translateX(-15px); }
+          33% { transform: translateY(-30px) translateX(15px); }
+          66% { transform: translateY(15px) translateX(-20px); }
         }
         .animate-float { animation: float 8s ease-in-out infinite; }
         .animate-float-delayed { animation: float 10s ease-in-out infinite 2s; }
+        .animate-float-slow { animation: float 14s ease-in-out infinite 4s; }
+
         @keyframes slideUp {
-          from { opacity: 0; transform: translateY(30px); }
+          from { opacity: 0; transform: translateY(40px) scale(0.95); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .animate-slide-up { animation: slideUp 0.7s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        .animate-slide-up { animation: slideUp 0.6s ease-out both; }
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
         .animate-fade-in { animation: fadeIn 0.5s ease-out both; }
+
         @keyframes benefitIn {
-          from { opacity: 0; transform: translateX(-10px); }
+          from { opacity: 0; transform: translateX(-15px); }
           to { opacity: 1; transform: translateX(0); }
         }
         .animate-benefit { animation: benefitIn 0.4s ease-out both; }
