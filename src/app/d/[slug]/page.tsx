@@ -178,26 +178,28 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
           <div className="flex flex-col items-center max-w-sm">
 
             <div className="animate-fade-in text-center mb-8" style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
-              <h2 className="text-2xl font-bold mb-2">Deine digitale Treuekarte</h2>
-              <p className="text-white/40 text-sm">
-                Jetzt kostenlos in deine <span className="text-white/70 font-medium">Apple Wallet</span> hinzufügen
+              <h2 className="text-2xl font-bold mb-2">
+                Die digitale Treuekarte<br />
+                <span className="text-white/60">für {lead.business_name}</span>
+              </h2>
+              <p className="text-white/35 text-sm mt-2">
+                Direkt in der <span className="text-white/70 font-semibold">Apple Wallet</span> deiner Kunden.
               </p>
-              <p className="text-white/25 text-xs mt-1">Immer dabei. Direkt auf deinem iPhone.</p>
+              <p className="text-white/20 text-xs mt-1">Keine App nötig. Kostenlos.</p>
             </div>
 
             {/* QR (Desktop) */}
             {isDesktop && (
               <div className="animate-fade-in mb-8" style={{ animationDelay: '0.3s', animationFillMode: 'both' }}>
-                <p className="text-white/30 text-xs text-center mb-3">Scanne mit deinem Smartphone:</p>
-                <div className="relative">
-                  <div className="absolute inset-0 rounded-3xl blur-2xl opacity-15"
+                <p className="text-white/30 text-xs text-center mb-3">Mit dem Handy scannen:</p>
+                <div className="relative inline-block">
+                  <div className="absolute -inset-3 rounded-2xl blur-xl opacity-10"
                     style={{ backgroundColor: labelColor }} />
-                  <div className="relative bg-white rounded-3xl p-5 shadow-2xl">
+                  <div className="relative bg-white rounded-2xl p-3 shadow-xl">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={qrUrl} alt="QR Code" className="w-44 h-44" />
+                    <img src={qrUrl} alt="QR Code" className="w-40 h-40" />
                   </div>
                 </div>
-                <p className="text-white/15 text-[10px] text-center mt-2 font-mono">{slug}</p>
               </div>
             )}
 
@@ -207,26 +209,48 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
                 leadId={lead.id}
                 passSerial={lead.pass_serial}
                 googlePassUrl={lead.google_pass_url}
-                phone={lead.phone}
                 isIOS={isIOS}
                 isAndroid={isAndroid}
               />
             </div>
 
-            {/* Benefits */}
+            {/* Benefits — written for the business owner */}
             <div className="mt-10 space-y-4 w-full">
               {[
-                { icon: '📲', text: 'Push-Nachrichten direkt auf dem Sperrbildschirm' },
-                { icon: '📍', text: 'GPS-Erinnerung wenn Kunden in der Nähe sind' },
-                { icon: '🎁', text: `Deine Prämie: ${reward}` },
-                { icon: '✨', text: 'Kostenlos. Keine App nötig.' },
+                { icon: '📲', text: 'Erreiche deine Kunden per Push-Nachricht — direkt auf dem Sperrbildschirm' },
+                { icon: '📍', text: 'Kunden in der Nähe werden automatisch an deinen Laden erinnert' },
+                { icon: '🔄', text: 'Kunden kommen öfter wieder — durch digitale Stempel statt Papierkarten' },
+                { icon: '🎁', text: `Deine Kunden sammeln Stempel für: ${reward}` },
               ].map((b, i) => (
-                <div key={i} className="animate-benefit flex items-center gap-3 text-sm"
+                <div key={i} className="animate-benefit flex items-start gap-3 text-sm"
                   style={{ animationDelay: `${0.6 + i * 0.1}s`, animationFillMode: 'both' }}>
-                  <span className="text-lg shrink-0">{b.icon}</span>
-                  <span className="text-white/50">{b.text}</span>
+                  <span className="text-lg shrink-0 mt-0.5">{b.icon}</span>
+                  <span className="text-white/45">{b.text}</span>
                 </div>
               ))}
+            {/* WhatsApp CTA — conversion focused */}
+            {lead.phone && (
+              <div className="animate-fade-in mt-10 w-full" style={{ animationDelay: '1s', animationFillMode: 'both' }}>
+                <div className="border border-white/10 rounded-2xl p-5 bg-white/[0.02] backdrop-blur-sm text-center">
+                  <p className="text-white/60 text-sm mb-3">
+                    Interesse? Lass uns kurz sprechen — <span className="text-white/80 font-medium">unverbindlich</span>.
+                  </p>
+                  <a href={`https://wa.me/${lead.phone.replace(/[^0-9+]/g, '')}?text=${encodeURIComponent(`Hallo, ich habe die digitale Treuekarte für ${lead.business_name} gesehen und hätte Interesse!`)}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2.5 px-8 py-3.5
+                      rounded-full font-semibold bg-[#25D366] text-white
+                      hover:bg-[#20BD5A] hover:scale-[1.02] active:scale-[0.98]
+                      transition-all duration-200 shadow-lg shadow-green-500/20">
+                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+                      <path d="M12 0C5.373 0 0 5.373 0 12c0 2.625.846 5.059 2.284 7.034L.789 23.492a.5.5 0 0 0 .612.616l4.575-1.453A11.93 11.93 0 0 0 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22a9.94 9.94 0 0 1-5.39-1.584l-.386-.232-2.716.862.886-2.635-.253-.403A9.935 9.935 0 0 1 2 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+                    </svg>
+                    Per WhatsApp kontaktieren
+                  </a>
+                </div>
+              </div>
+            )}
+
             </div>
           </div>
         </div>
