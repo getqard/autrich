@@ -63,6 +63,9 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
   // Stamp dots (filled = small colored circles, empty = gray circles)
   const stampDots = Array.from({ length: maxStamps }, (_, i) => i < currentStamps)
 
+  // Short business name: "2A Studio | Toller Stil..." → "2A Studio"
+  const shortName = lead.business_name.split(/\s*[|–—\-:]\s*/)[0].trim() || lead.business_name
+
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
   const pageUrl = `${baseUrl}/d/${slug}`
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(pageUrl)}&bgcolor=ffffff&color=000000`
@@ -82,22 +85,11 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
 
       <div className="relative z-10 flex flex-col items-center justify-center min-h-screen px-5 py-10">
 
-        {/* Logo + Name */}
-        <div className="animate-fade-in flex flex-col items-center mb-6">
-          {hasRealLogo && (
-            <div className="w-14 h-14 rounded-2xl shadow-lg overflow-hidden mb-3 bg-white/5 backdrop-blur-sm border border-white/10">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={lead.logo_url!} alt="" className="w-full h-full object-contain p-1" />
-            </div>
-          )}
-          <h1 className="text-xl font-bold text-center">{lead.business_name}</h1>
-        </div>
+        {/* Layout: side-by-side on desktop, stacked on mobile */}
+        <div className={`w-full max-w-4xl ${isDesktop ? 'flex items-center gap-12 justify-center' : 'flex flex-col items-center'}`}>
 
-        {/* Layout */}
-        <div className={`w-full max-w-4xl ${isDesktop ? 'flex items-center gap-16 justify-center' : 'flex flex-col items-center'}`}>
-
-          {/* ═══ WALLET PASS MOCKUP ═══ */}
-          <div className="animate-slide-up mb-8 shrink-0">
+          {/* ═══ LEFT: WALLET PASS MOCKUP ═══ */}
+          <div className="animate-slide-up shrink-0 mb-8 lg:mb-0">
             <div className="w-[320px] rounded-[20px] overflow-hidden shadow-2xl border border-white/10"
               style={{ backgroundColor: bgColor }}>
 
@@ -108,7 +100,7 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={lead.logo_url!} alt="" className="w-10 h-10 rounded-lg object-contain" />
                   )}
-                  <span className="font-semibold text-sm" style={{ color: textColor }}>{lead.business_name}</span>
+                  <span className="font-semibold text-sm truncate max-w-[180px]" style={{ color: textColor }}>{shortName}</span>
                 </div>
               </div>
 
@@ -178,27 +170,38 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
           {/* ═══ RIGHT SIDE ═══ */}
           <div className="flex flex-col items-center max-w-sm">
 
-            <div className="animate-fade-in text-center mb-8" style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
-              <h2 className="text-2xl font-bold mb-2">
-                Die digitale Treuekarte<br />
-                <span className="text-white/60">für {lead.business_name}</span>
+            {/* Logo + Short Name */}
+            <div className="animate-fade-in flex items-center gap-3 mb-5" style={{ animationDelay: '0.1s', animationFillMode: 'both' }}>
+              {hasRealLogo && (
+                <div className="w-12 h-12 rounded-xl shadow-lg overflow-hidden bg-white/5 border border-white/10">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={lead.logo_url!} alt="" className="w-full h-full object-contain p-1" />
+                </div>
+              )}
+              <span className="text-lg font-bold">{shortName}</span>
+            </div>
+
+            {/* Headline */}
+            <div className="animate-fade-in text-center mb-6" style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
+              <h2 className="text-xl font-bold mb-1.5">
+                Deine Kunden. Deine Wallet.
               </h2>
-              <p className="text-white/35 text-sm mt-2">
-                Direkt in der <span className="text-white/70 font-semibold">Apple Wallet</span> deiner Kunden.
+              <p className="text-white/40 text-sm">
+                Digitale Stempelkarte direkt in der <span className="text-white/70 font-semibold">Apple Wallet</span>.
               </p>
-              <p className="text-white/20 text-xs mt-1">Keine App nötig. Kostenlos.</p>
+              <p className="text-white/25 text-xs mt-1">Keine App. Kostenlos. Sofort einsatzbereit.</p>
             </div>
 
             {/* QR (Desktop) */}
             {isDesktop && (
-              <div className="animate-fade-in mb-8" style={{ animationDelay: '0.3s', animationFillMode: 'both' }}>
-                <p className="text-white/30 text-xs text-center mb-3">Mit dem Handy scannen:</p>
+              <div className="animate-fade-in mb-6" style={{ animationDelay: '0.3s', animationFillMode: 'both' }}>
+                <p className="text-white/30 text-xs text-center mb-2">Mit dem Handy scannen:</p>
                 <div className="relative inline-block">
-                  <div className="absolute -inset-3 rounded-2xl blur-xl opacity-10"
+                  <div className="absolute -inset-2 rounded-xl blur-lg opacity-10"
                     style={{ backgroundColor: labelColor }} />
-                  <div className="relative bg-white rounded-2xl p-3 shadow-xl">
+                  <div className="relative bg-white rounded-xl p-2.5 shadow-xl">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={qrUrl} alt="QR Code" className="w-40 h-40" />
+                    <img src={qrUrl} alt="QR Code" className="w-32 h-32" />
                   </div>
                 </div>
               </div>
