@@ -261,6 +261,24 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
 
       </div>
 
+      {/* Sticky WhatsApp Button — bottom right */}
+      <a href={`https://wa.me/49151533344?text=${encodeURIComponent(`Hallo, ich habe die digitale Treuekarte für ${lead.business_name} gesehen und hätte Interesse!`)}`}
+        target="_blank" rel="noopener noreferrer"
+        className="fixed bottom-6 right-6 z-50 flex items-center gap-2 pl-4 pr-5 py-3
+          rounded-full bg-[#25D366] text-white font-semibold text-sm
+          shadow-xl shadow-green-500/30
+          hover:scale-[1.05] active:scale-[0.95] transition-all duration-200 overflow-hidden">
+        {/* Shimmer */}
+        <div className="absolute inset-0 animate-shimmer"
+          style={{ background: 'linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.2) 50%, transparent 60%)', backgroundSize: '200% 100%' }} />
+        {/* Red notification dot */}
+        <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full border-2 border-[#0a0a0a] animate-ping-dot" />
+        <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full border-2 border-[#0a0a0a]" />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/whatsapp.svg" alt="" className="w-5 h-5 relative" />
+        <span className="relative">Kontaktieren</span>
+      </a>
+
       <style>{`
         @keyframes float {
           0%, 100% { transform: translateY(0) translateX(0); }
@@ -294,6 +312,13 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
           100% { background-position: -200% 0; }
         }
         .animate-shimmer { animation: shimmer 3s ease-in-out infinite; }
+
+        @keyframes pingDot {
+          0% { transform: scale(1); opacity: 1; }
+          75% { transform: scale(2); opacity: 0; }
+          100% { transform: scale(2); opacity: 0; }
+        }
+        .animate-ping-dot { animation: pingDot 1.5s ease-out infinite; }
       `}</style>
     </div>
   )
