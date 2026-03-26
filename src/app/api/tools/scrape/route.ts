@@ -6,6 +6,7 @@ import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
 import { checkLogoVisibility } from '@/lib/enrichment/logo-contrast-check'
 import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
+import { aiPickBestLogo } from '@/lib/enrichment/logo-picker-ai'
 import { normalizeDomain } from '@/lib/scraping/domain-utils'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
 import { INDUSTRIES } from '@/data/industries-seed'
@@ -127,8 +128,21 @@ export async function POST(request: NextRequest) {
 
       // Normal website flow
 
-      // 1. Website logo (score-based — bestLogo is the highest-scored candidate)
-      if (result.logoCandidates?.length) {
+      // 1. AI Logo Picker — shows all candidates to Haiku, picks the real business logo
+      // Falls back to score-based if AI unavailable
+      if (result.logoCandidates?.length >= 2 && business_name) {
+        try {
+          const aiPick = await aiPickBestLogo(result.logoCandidates, business_name)
+          if (aiPick) {
+            logoBuffer = aiPick.buffer
+            logoSource = 'ai-picked'
+            console.log(`[Scrape] AI picked logo: ${aiPick.source} (${aiPick.url.substring(0, 60)}...)`)
+          }
+        } catch { /* non-fatal, fall through to score-based */ }
+      }
+
+      // Score-based fallback (if AI didn't pick or unavailable)
+      if (!logoBuffer && result.logoCandidates?.length) {
         const pickedUrl = result.bestLogo?.url || null
 
         if (pickedUrl) {
