@@ -28,8 +28,12 @@ export default function LeadDetailPage() {
   const [showPalette, setShowPalette] = useState(false)
   const [franchiseInfo, setFranchiseInfo] = useState<{ isFranchise: boolean; franchiseCount: number; isGeneric: boolean } | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [allEmails, setAllEmails] = useState<any[] | null>(null)
   const [emailsLoading, setEmailsLoading] = useState(false)
+  const [pipelineRunning, setPipelineRunning] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [pipelineResult, setPipelineResult] = useState<Record<string, any> | null>(null)
 
   const loadLead = useCallback(async () => {
     const res = await fetch(`/api/leads/${id}`)
@@ -56,6 +60,20 @@ export default function LeadDetailPage() {
       body: JSON.stringify({ pipeline_status: status }),
     })
     loadLead()
+  }
+
+  async function runFullPipeline() {
+    setPipelineRunning(true)
+    setPipelineResult(null)
+    setAllEmails(null)
+    try {
+      const res = await fetch(`/api/leads/${id}/run-pipeline`, { method: 'POST' })
+      const data = await res.json()
+      setPipelineResult(data)
+      if (data.steps?.emails?.results) setAllEmails(data.steps.emails.results)
+      loadLead()
+    } catch { alert('Pipeline fehlgeschlagen') }
+    setPipelineRunning(false)
   }
 
   async function runAllEmails() {
@@ -140,6 +158,57 @@ export default function LeadDetailPage() {
             {PIPELINE_OPTIONS.map(s => <option key={s} value={s}>{s.toUpperCase()}</option>)}
           </select>
         </div>
+      </div>
+
+      {/* ═══ FULL PIPELINE BUTTON ═══ */}
+      <div className="mb-6">
+        <button onClick={runFullPipeline} disabled={pipelineRunning || !lead.website_url}
+          className="w-full px-6 py-4 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-xl
+            text-sm font-semibold hover:from-purple-500 hover:to-blue-500
+            disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3
+            transition-all duration-200 shadow-lg shadow-purple-500/20">
+          {pipelineRunning ? (
+            <>
+              <Loader2 size={18} className="animate-spin" />
+              Pipeline läuft... (Scrape → Pass → Email)
+            </>
+          ) : (
+            <>
+              <Wallet size={18} />
+              Kompletter Flow: Scrape → Pass → Download-Seite → 5 Emails
+            </>
+          )}
+        </button>
+
+        {/* Pipeline Result */}
+        {pipelineResult && (
+          <div className="mt-3 bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-zinc-400">Pipeline {pipelineResult.success ? 'abgeschlossen' : 'fehlgeschlagen'}</span>
+              <span className="text-[10px] text-zinc-600">{pipelineResult.durationMs}ms</span>
+            </div>
+            {pipelineResult.steps && Object.entries(pipelineResult.steps).map(([step, data]) => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const d = data as Record<string, any>
+              return (
+                <div key={step} className="flex items-center gap-2 text-xs">
+                  <span className={d.success ? 'text-green-400' : 'text-red-400'}>{d.success ? '✓' : '✗'}</span>
+                  <span className="text-zinc-300 font-medium capitalize">{step}</span>
+                  {d.durationMs && <span className="text-zinc-600">{d.durationMs as number}ms</span>}
+                  {step === 'scrape' && d.contactName && <span className="text-zinc-500">({d.contactName as string})</span>}
+                  {step === 'classify' && d.industry && <span className="text-zinc-500">({d.industry as string})</span>}
+                  {step === 'pass' && d.serial && <span className="text-zinc-500 font-mono text-[10px]">{(d.serial as string).substring(0, 8)}</span>}
+                  {step === 'emails' && d.count && <span className="text-zinc-500">{d.count as number} Strategien</span>}
+                  {step === 'downloadPage' && d.url && (
+                    <a href={d.url as string} target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 text-[10px]">
+                      {(d.slug as string)}
+                    </a>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

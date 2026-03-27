@@ -177,6 +177,19 @@ export async function POST(
       return NextResponse.json({ error: 'Keine Ergebnisse' }, { status: 400 })
     }
 
+    // Dedup: load existing emails + normalized business names
+    const { data: existingLeads } = await supabase
+      .from('leads')
+      .select('email, business_name')
+    const existingEmails = new Set(
+      (existingLeads || []).map(l => l.email?.toLowerCase()).filter(Boolean)
+    )
+    const existingNames = new Set(
+      (existingLeads || []).map(l => l.business_name?.toLowerCase().trim()).filter(Boolean)
+    )
+    // Track names within this batch too (franchise dedup)
+    const batchNames = new Set<string>()
+
     let imported = 0, skipped = 0
     const errors: string[] = []
 
@@ -214,6 +227,17 @@ export async function POST(
         }
 
         if (!lead.email) { skipped++; continue }
+
+        // Dedup: skip if email already exists
+        if (existingEmails.has(lead.email.toLowerCase())) { skipped++; continue }
+
+        // Dedup: skip if exact same business name already exists (franchise/chain)
+        const normalizedName = lead.business_name.toLowerCase().trim()
+        if (existingNames.has(normalizedName) || batchNames.has(normalizedName)) { skipped++; continue }
+
+        // Track for batch dedup
+        existingEmails.add(lead.email.toLowerCase())
+        batchNames.add(normalizedName)
 
         const { error: insertErr } = await supabase.from('leads').insert(lead)
         if (insertErr) {
