@@ -199,6 +199,12 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
           'button-info', 'button-warning', 'button-success', 'button-danger',
           'page-transition', 'wp-block-button', 'elementor-button', 'elementor-kit',
           'structural', 'checkbox',
+          // UI notification/status components — never brand colors
+          'notice', 'warning', 'alert', 'error', 'success', 'info',
+          'toast', 'banner', 'notification', 'message', 'snackbar',
+          // WordPress/WooCommerce components
+          'woocommerce', 'wc-block', 'components-notice', 'is-warning', 'is-error', 'is-success',
+          'screen-reader', 'sr-only', 'skip-link',
         ]
         const isFrameworkSource = (src: string) => {
           const lower = src.toLowerCase()
