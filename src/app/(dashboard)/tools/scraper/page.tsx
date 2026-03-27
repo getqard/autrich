@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   Globe, ArrowLeft, Loader2, CheckCircle, XCircle,
   AlertTriangle, Clock, Share2, FileText, Palette,
-  Image, ChevronDown, ChevronUp, Wallet, Download, ExternalLink,
+  Image, ChevronDown, ChevronUp, Wallet, Download, ExternalLink, Mail,
 } from 'lucide-react'
 
 type LogoCandidate = {
@@ -83,6 +83,10 @@ export default function ScraperPage() {
   const [error, setError] = useState<string | null>(null)
   const [showPalette, setShowPalette] = useState(false)
   const [generatingPass, setGeneratingPass] = useState(false)
+  const [generatingEmail, setGeneratingEmail] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [emailResult, setEmailResult] = useState<Record<string, any> | null>(null)
+  const [emailError, setEmailError] = useState<string | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [passResult, setPassResult] = useState<Record<string, any> | null>(null)
   const [passError, setPassError] = useState<string | null>(null)
@@ -122,6 +126,47 @@ export default function ScraperPage() {
       setPassError('Netzwerkfehler')
     } finally {
       setGeneratingPass(false)
+    }
+  }
+
+  async function handleGenerateEmail() {
+    if (!result?.enrichmentPreview || !passResult?.downloadPage) return
+    setGeneratingEmail(true)
+    setEmailResult(null)
+    setEmailError(null)
+
+    const ep = result.enrichmentPreview
+    const dp = passResult.downloadPage as Record<string, string>
+
+    try {
+      const res = await fetch('/api/tools/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generate',
+          business_name: businessName || result.title || 'Business',
+          contact_name: result.impressum?.contactName || null,
+          contact_first_name: result.impressum?.firstName || null,
+          contact_last_name: result.impressum?.lastName || null,
+          city: null,
+          industry: ep.industry?.slug || null,
+          website_description: result.description || null,
+          website_about: result.websiteAbout || null,
+          website_headlines: result.websiteHeadlines || null,
+          founding_year: result.impressum?.foundingYear || null,
+          detected_reward: ep.industry?.defaultReward || null,
+          download_url: dp.url,
+          strategy: 'curiosity',
+          formal: false,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setEmailError(data.error); return }
+      setEmailResult(data)
+    } catch {
+      setEmailError('Netzwerkfehler')
+    } finally {
+      setGeneratingEmail(false)
     }
   }
 
@@ -856,6 +901,36 @@ export default function ScraperPage() {
                       className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-500">
                       <ExternalLink size={14} /> Öffnen
                     </a>
+                  </div>
+                )}
+
+                {/* Email Generation */}
+                {passResult.downloadPage && (
+                  <div className="mt-2">
+                    <button onClick={handleGenerateEmail} disabled={generatingEmail}
+                      className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-500 disabled:opacity-50">
+                      {generatingEmail ? <Loader2 size={14} className="animate-spin" /> : <Mail size={14} />}
+                      Email generieren (Curiosity)
+                    </button>
+                  </div>
+                )}
+
+                {emailError && (
+                  <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mt-2">
+                    <p className="text-sm text-red-400">{emailError}</p>
+                  </div>
+                )}
+
+                {emailResult && (
+                  <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-4 mt-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm text-amber-400 font-medium">Email ({emailResult.strategy})</p>
+                      <span className="text-[10px] text-zinc-600">{emailResult.word_count} Wörter | ${emailResult.cost_usd?.toFixed(5)}</span>
+                    </div>
+                    <p className="text-xs text-zinc-300 font-semibold mb-2">Subject: {emailResult.subject}</p>
+                    <div className="bg-zinc-800/50 rounded-lg p-3 text-xs text-zinc-400 whitespace-pre-wrap leading-relaxed">
+                      {emailResult.body}
+                    </div>
                   </div>
                 )}
 
