@@ -182,9 +182,8 @@ export async function scrapeImpressum(
       result.foundingYear = extractFoundingYear(pageText)
     }
 
-    // Extract name using patterns
+    // First try regex patterns (fast, $0)
     const lines = pageText.split('\n').map(l => l.trim()).filter(Boolean)
-
     for (const pattern of NAME_PATTERNS) {
       for (const line of lines) {
         const match = line.match(pattern)
@@ -194,15 +193,65 @@ export async function scrapeImpressum(
             result.contactName = cleaned.full
             result.firstName = cleaned.first
             result.lastName = cleaned.last
-            result.source = pattern.source.substring(0, 30)
-            console.log(`[Impressum] Found: ${cleaned.full} (${result.source})`)
+            result.source = 'regex'
+            console.log(`[Impressum] Regex found: ${cleaned.full}`)
             return result
           }
         }
       }
     }
 
-    console.log('[Impressum] No name found on impressum page')
+    // Regex failed — use Haiku AI to extract name (~$0.0005)
+    console.log('[Impressum] Regex failed, trying Haiku AI...')
+    try {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default
+      if (!process.env.ANTHROPIC_API_KEY) throw new Error('No API key')
+
+      const client = new Anthropic()
+      const trimmedText = pageText.substring(0, 2000) // Max 2000 chars to keep costs low
+
+      const response = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 80,
+        messages: [{
+          role: 'user',
+          content: `Aus diesem Impressum-Text: Wer ist der Inhaber/Geschäftsführer? Nur den Personennamen extrahieren, keine Firma.
+
+Text:
+${trimmedText}
+
+Antworte NUR mit JSON: {"name": "Vorname Nachname"} oder {"name": null} wenn kein Name gefunden.`,
+        }],
+      })
+
+      const aiText = response.content
+        .filter(b => b.type === 'text')
+        .map(b => (b as { type: 'text'; text: string }).text).join('')
+
+      const jsonMatch = aiText.match(/\{[^}]+\}/)
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as { name?: string | null }
+        if (parsed.name && typeof parsed.name === 'string') {
+          const cleaned = cleanName(parsed.name)
+          if (cleaned) {
+            result.contactName = cleaned.full
+            result.firstName = cleaned.first
+            result.lastName = cleaned.last
+            result.source = 'ai'
+            console.log(`[Impressum] AI found: ${cleaned.full}`)
+
+            // Also try founding year from AI text if not found yet
+            if (!result.foundingYear) {
+              result.foundingYear = extractFoundingYear(trimmedText)
+            }
+            return result
+          }
+        }
+      }
+      console.log('[Impressum] AI could not find name')
+    } catch (err) {
+      console.log(`[Impressum] AI failed: ${err instanceof Error ? err.message : err}`)
+    }
   } catch (err) {
     console.log(`[Impressum] Failed: ${err instanceof Error ? err.message : err}`)
   }
