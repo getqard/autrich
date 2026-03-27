@@ -66,8 +66,11 @@ export async function POST(
         })
         clearTimeout(timeout)
         if (res.ok) {
-          logoBuffer = Buffer.from(await res.arrayBuffer())
-          logoSource = 'website'
+          const buf = Buffer.from(await res.arrayBuffer())
+          if (buf.length > 500) {
+            logoBuffer = buf
+            logoSource = 'website'
+          }
         }
       } catch { /* fallback */ }
     }
