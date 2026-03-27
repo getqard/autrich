@@ -27,6 +27,9 @@ export default function LeadDetailPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [showPalette, setShowPalette] = useState(false)
   const [franchiseInfo, setFranchiseInfo] = useState<{ isFranchise: boolean; franchiseCount: number; isGeneric: boolean } | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [allEmails, setAllEmails] = useState<any[] | null>(null)
+  const [emailsLoading, setEmailsLoading] = useState(false)
 
   const loadLead = useCallback(async () => {
     const res = await fetch(`/api/leads/${id}`)
@@ -53,6 +56,23 @@ export default function LeadDetailPage() {
       body: JSON.stringify({ pipeline_status: status }),
     })
     loadLead()
+  }
+
+  async function runAllEmails() {
+    setEmailsLoading(true)
+    setAllEmails(null)
+    try {
+      const res = await fetch(`/api/leads/${id}/generate-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: true }),
+      })
+      const data = await res.json()
+      if (res.ok && data.results) setAllEmails(data.results)
+      else alert(data.error || 'Fehler')
+      loadLead()
+    } catch { alert('Netzwerkfehler') }
+    setEmailsLoading(false)
   }
 
   async function runAction(action: string) {
@@ -294,9 +314,42 @@ export default function LeadDetailPage() {
             </div>
             <div className="flex flex-wrap gap-2 mt-4">
               <ActionButton icon={Mail} label="Re-Generate Email" action="generate-email" loading={actionLoading} onClick={runAction} />
+              <button onClick={runAllEmails} disabled={emailsLoading}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 rounded-lg text-xs text-white hover:bg-amber-500 disabled:opacity-50">
+                {emailsLoading ? <Loader2 size={12} className="animate-spin" /> : <Mail size={12} />}
+                Alle 5 Strategien
+              </button>
               <ActionButton icon={Send} label="Test an mich" action="send-test" loading={actionLoading} onClick={runAction} />
             </div>
           </Section>
+
+          {/* All 5 Email Strategies */}
+          {allEmails && (
+            <Section title="Alle 5 Strategien">
+              <div className="space-y-3">
+                {allEmails.map((email, i) => (
+                  <div key={i} className="bg-zinc-800 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-zinc-700 text-zinc-300 font-medium">
+                        {email.strategy || `Strategie ${i + 1}`}
+                      </span>
+                      <span className="text-[10px] text-zinc-600">
+                        {email.word_count} Wörter{email.cost_usd ? ` | $${email.cost_usd.toFixed(5)}` : ''}
+                      </span>
+                    </div>
+                    {email.error ? (
+                      <p className="text-xs text-red-400">{email.error}</p>
+                    ) : (
+                      <>
+                        <p className="text-xs text-zinc-200 font-semibold mb-1">Subject: {email.subject}</p>
+                        <p className="text-[11px] text-zinc-400 whitespace-pre-wrap leading-relaxed">{email.body}</p>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
 
           {/* Reply */}
           {lead.reply_text && (
