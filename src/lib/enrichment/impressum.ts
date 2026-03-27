@@ -168,6 +168,13 @@ export async function scrapeImpressum(
 
     const html = await res.text()
     const $ = cheerio.load(html)
+
+    // Replace <br> tags with newlines BEFORE extracting text
+    // Otherwise "Name und Anschrift<br>Hawjen Jaaf" becomes "Name und AnschriftHawjen Jaaf"
+    $('br').replaceWith('\n')
+    $('p, div, h1, h2, h3, h4, h5, h6, li, td').each((_, el) => {
+      $(el).append('\n')
+    })
     const pageText = $('body').text()
 
     // Try to extract founding year from impressum too
