@@ -219,34 +219,35 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
         let labelColor: string
 
         if (aiColors.label) {
-          const maxDist = aiColors.confidence >= 0.85 ? 80 : 60
-          // Only count HIGH-QUALITY CSS sources as confirmation
-          // css-var: and css-rule: are intentional brand decisions
-          // css-color:, css-border:, css-svg-fill: are too noisy
-          const existsInCSS = cssCandidates.some(c =>
-            perceptualDistance(c.hex, aiColors.label!) < maxDist &&
-            (c.source.startsWith('css-var:') || c.source.startsWith('css-rule:')) &&
-            !isFrameworkSource(c.source)
-          )
-
-          if (existsInCSS) {
-            // AI label confirmed by reliable CSS source → trust it
-            const confirmingCSS = cssCandidates.find(c =>
+          // HIGH CONFIDENCE (≥ 0.90): Trust the AI directly — it clearly sees this color
+          if (aiColors.confidence >= 0.90 && colorSaturation(aiColors.label) >= 0.3) {
+            labelColor = ensureLabelContrast(aiColors.label, bg)
+            log(`AI label ${aiColors.label} TRUSTED (confidence ${aiColors.confidence} ≥ 0.90)`)
+          } else {
+            // Lower confidence: need CSS confirmation
+            const maxDist = aiColors.confidence >= 0.85 ? 80 : 60
+            const existsInCSS = cssCandidates.some(c =>
               perceptualDistance(c.hex, aiColors.label!) < maxDist &&
               (c.source.startsWith('css-var:') || c.source.startsWith('css-rule:')) &&
               !isFrameworkSource(c.source)
             )
-            log(`AI label ${aiColors.label} confirmed by CSS ${confirmingCSS?.hex} (${confirmingCSS?.source})`)
-            labelColor = ensureLabelContrast(aiColors.label, bg)
-          } else if (realBrandAccent) {
-            // AI label not in CSS but real brand accent exists → use it
-            labelColor = ensureLabelContrast(realBrandAccent.hex, bg)
-            log(`AI label ${aiColors.label} not in CSS → real brand accent ${realBrandAccent.hex} (${realBrandAccent.source})`)
-          } else {
-            // No real brand accent at all → monochrome gray
-            const bgLum = hexLuminance(bg)
-            labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
-            log(`AI label ${aiColors.label} not in CSS, no brand accent → monochrome gray`)
+
+            if (existsInCSS) {
+              const confirmingCSS = cssCandidates.find(c =>
+                perceptualDistance(c.hex, aiColors.label!) < maxDist &&
+                (c.source.startsWith('css-var:') || c.source.startsWith('css-rule:')) &&
+                !isFrameworkSource(c.source)
+              )
+              log(`AI label ${aiColors.label} confirmed by CSS ${confirmingCSS?.hex} (${confirmingCSS?.source})`)
+              labelColor = ensureLabelContrast(aiColors.label, bg)
+            } else if (realBrandAccent) {
+              labelColor = ensureLabelContrast(realBrandAccent.hex, bg)
+              log(`AI label ${aiColors.label} not in CSS → real brand accent ${realBrandAccent.hex} (${realBrandAccent.source})`)
+            } else {
+              const bgLum = hexLuminance(bg)
+              labelColor = bgLum < 0.3 ? '#c8c8c8' : '#404040'
+              log(`AI label ${aiColors.label} not in CSS, no brand accent → monochrome gray`)
+            }
           }
 
         // No AI label

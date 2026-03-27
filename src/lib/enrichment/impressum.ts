@@ -37,6 +37,7 @@ const NAME_PATTERNS = [
   /(?:Name und Anschrift)\s*:?\s*(.+)/i,
   /(?:Angaben gemäß|Angaben gem\.)\s*§.*?\s*:?\s*(.+)/i,
   /(?:Diensteanbieter|Betreiber)\s*:?\s*(.+)/i,
+  /(?:Vertretungsberechtigt(?:er)?)\s+(?:ist\s+)?(?:Hr\.|Herr|Fr\.|Frau)?\s*(.+?)(?:\s+als\b|\s*$)/i,
   /(?:Kontakt)\s*:?\s*(.+)/i,
 ]
 
@@ -208,7 +209,7 @@ export async function scrapeImpressum(
       if (!process.env.ANTHROPIC_API_KEY) throw new Error('No API key')
 
       const client = new Anthropic()
-      const trimmedText = pageText.substring(0, 800) // Name steht immer oben im Impressum
+      const trimmedText = pageText.substring(0, 1500) // Manche Impressums haben den Namen weiter unten
 
       const response = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
