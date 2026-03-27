@@ -68,6 +68,9 @@ type ScrapeResult = {
   error?: string
   enrichmentPreview?: EnrichmentPreview
   _cache?: CacheInfo
+  impressum?: { contactName: string; firstName: string; lastName: string; foundingYear: number | null } | null
+  websiteHeadlines?: string | null
+  websiteAbout?: string | null
 }
 
 export default function ScraperPage() {
@@ -642,6 +645,51 @@ export default function ScraperPage() {
                     </span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Impressum + Website Text */}
+          {(result.impressum || result.websiteHeadlines || result.websiteAbout) && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+              <h3 className="font-semibold text-sm mb-4">Impressum + Website-Text</h3>
+              <div className="space-y-3">
+                {result.impressum && (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-zinc-500">Inhaber/GF</span>
+                      <span className="text-sm text-green-400 font-medium">{result.impressum.contactName}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-zinc-500">Vorname / Nachname</span>
+                      <span className="text-xs text-zinc-300">{result.impressum.firstName} / {result.impressum.lastName}</span>
+                    </div>
+                    {result.impressum.foundingYear && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-zinc-500">Gegründet</span>
+                        <span className="text-xs text-zinc-300">{result.impressum.foundingYear}</span>
+                      </div>
+                    )}
+                  </>
+                )}
+                {!result.impressum && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-500">Inhaber</span>
+                    <span className="text-xs text-zinc-600">Nicht gefunden</span>
+                  </div>
+                )}
+                {result.websiteHeadlines && (
+                  <div>
+                    <span className="text-xs text-zinc-500">Headlines</span>
+                    <p className="text-[10px] text-zinc-400 mt-1 break-all">{result.websiteHeadlines.substring(0, 200)}</p>
+                  </div>
+                )}
+                {result.websiteAbout && (
+                  <div>
+                    <span className="text-xs text-zinc-500">Über uns</span>
+                    <p className="text-[10px] text-zinc-400 mt-1">{result.websiteAbout.substring(0, 200)}</p>
+                  </div>
+                )}
               </div>
             </div>
           )}
