@@ -208,7 +208,7 @@ export async function scrapeImpressum(
       if (!process.env.ANTHROPIC_API_KEY) throw new Error('No API key')
 
       const client = new Anthropic()
-      const trimmedText = pageText.substring(0, 2000) // Max 2000 chars to keep costs low
+      const trimmedText = pageText.substring(0, 800) // Name steht immer oben im Impressum
 
       const response = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
