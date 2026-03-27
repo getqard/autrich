@@ -186,16 +186,39 @@ export async function scrapeImpressum(
     // First try regex patterns (fast, $0)
     const lines = pageText.split('\n').map(l => l.trim()).filter(Boolean)
     for (const pattern of NAME_PATTERNS) {
-      for (const line of lines) {
-        const match = line.match(pattern)
+      for (let i = 0; i < lines.length; i++) {
+        const match = lines[i].match(pattern)
         if (match?.[1]) {
-          const cleaned = cleanName(match[1])
+          // Try the captured group first
+          let cleaned = cleanName(match[1])
+
+          // If capture is empty/invalid, try the NEXT line
+          // Handles: "Vertreten durch:\n Marcus Fischer"
+          if (!cleaned && i + 1 < lines.length) {
+            cleaned = cleanName(lines[i + 1])
+          }
+
           if (cleaned) {
             result.contactName = cleaned.full
             result.firstName = cleaned.first
             result.lastName = cleaned.last
             result.source = 'regex'
             console.log(`[Impressum] Regex found: ${cleaned.full}`)
+            return result
+          }
+        }
+
+        // Also check: line IS a keyword label → next line is the name
+        // Handles: "Vertreten durch:" on its own line
+        const labelOnly = lines[i].match(/^(?:Inhaber(?:in)?|Geschäftsführer(?:in)?|Vertreten durch|Name und Anschrift|Vertretungsberechtigt(?:er)?)\s*:?\s*$/i)
+        if (labelOnly && i + 1 < lines.length) {
+          const cleaned = cleanName(lines[i + 1])
+          if (cleaned) {
+            result.contactName = cleaned.full
+            result.firstName = cleaned.first
+            result.lastName = cleaned.last
+            result.source = 'regex-nextline'
+            console.log(`[Impressum] Regex next-line found: ${cleaned.full}`)
             return result
           }
         }
