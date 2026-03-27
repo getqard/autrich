@@ -26,12 +26,31 @@ export async function GET(
 
   // ─── STATUS ───────────────────────────────────────────────
   if (act === 'status') {
-    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+    const supabase = createServiceClient()
+
+    // Check if results already stored in DB
+    const { count: storedCount } = await supabase
+      .from('scrape_results_raw')
+      .select('id', { count: 'exact', head: true })
+      .eq('job_id', jobId)
+
+    const hasStoredResults = (storedCount || 0) > 0
+
+    // If DB says completed and results are stored → done
+    if (job.status === 'completed' && hasStoredResults) {
       return NextResponse.json({
-        status: job.status,
+        status: 'completed',
+        needs_store: false,
         results_count: job.results_count || 0,
         started_at: job.started_at,
         completed_at: job.completed_at,
+      })
+    }
+
+    if (job.status === 'failed' || job.status === 'cancelled') {
+      return NextResponse.json({
+        status: job.status,
+        results_count: 0,
         error_message: job.error_message,
       })
     }
@@ -42,20 +61,37 @@ export async function GET(
 
     try {
       const taskStatus = await getTaskStatus(job.gmaps_task_id)
-      const supabase = createServiceClient()
 
       if (taskStatus.status === 'completed') {
+        // Update DB status
         await supabase.from('scrape_jobs').update({
           status: 'completed',
           results_count: taskStatus.result_count,
           completed_at: new Date().toISOString(),
         }).eq('id', jobId)
+
+        // Tell frontend to store results
+        return NextResponse.json({
+          status: 'completed',
+          needs_store: !hasStoredResults,
+          results_count: taskStatus.result_count,
+          started_at: job.started_at,
+        })
       }
 
+      if (taskStatus.status === 'failed') {
+        await supabase.from('scrape_jobs').update({
+          status: 'failed', error_message: 'GMaps task failed',
+          completed_at: new Date().toISOString(),
+        }).eq('id', jobId)
+        return NextResponse.json({ status: 'failed', error_message: 'GMaps task failed' })
+      }
+
+      // Still running
       return NextResponse.json({
-        status: taskStatus.status === 'completed' ? 'completed' :
-               taskStatus.status === 'failed' ? 'failed' : 'running',
+        status: 'running',
         results_count: taskStatus.result_count,
+        preview_count: taskStatus.result_count,
         started_at: job.started_at,
       })
     } catch (err) {
