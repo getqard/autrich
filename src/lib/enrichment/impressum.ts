@@ -34,6 +34,10 @@ const NAME_PATTERNS = [
   /(?:Redaktionell verantwortlich)\s*:?\s*(.+)/i,
   /(?:Betriebsleiter(?:in)?)\s*:?\s*(.+)/i,
   /(?:Ansprechpartner(?:in)?)\s*:?\s*(.+)/i,
+  /(?:Name und Anschrift)\s*:?\s*(.+)/i,
+  /(?:Angaben gemäß|Angaben gem\.)\s*§.*?\s*:?\s*(.+)/i,
+  /(?:Diensteanbieter|Betreiber)\s*:?\s*(.+)/i,
+  /(?:Kontakt)\s*:?\s*(.+)/i,
 ]
 
 // Founding year patterns
