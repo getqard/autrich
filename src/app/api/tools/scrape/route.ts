@@ -218,9 +218,21 @@ export async function POST(request: NextRequest) {
           pickedUrl = nextBest?.url || null
         }
 
+        // Photo/image detection — these are NEVER logos even if they contain the business name
+        const PHOTO_PATTERNS = [
+          'image', 'photo', 'bild', 'foto', 'hochformat', 'querformat',
+          'hero', 'banner', 'slider', 'intro', 'startseite', 'background',
+          'header-bg', 'cover', 'gallery', 'portfolio', 'preview',
+          'dsc', 'img_', 'pic_', 'screenshot', 'thumbnail',
+        ]
+        const isLikelyPhoto = (url: string) => {
+          const filename = url.toLowerCase().split('/').pop() || ''
+          return PHOTO_PATTERNS.some(p => filename.includes(p))
+        }
+
         // Override: if another candidate has the business name in FILENAME → prefer it
+        // But ONLY for candidates that look like logos, NOT photos
         if (pickedUrl && nameWordsNorm.length >= 1) {
-          // Extract only the filename part (not domain) for matching
           const getFilename = (u: string) => {
             try { return decodeURIComponent(new URL(u).pathname.split('/').pop() || '') } catch { return u }
           }
@@ -240,7 +252,7 @@ export async function POST(request: NextRequest) {
 
           const bestMatchCount = getFilenameMatchCount(pickedUrl)
           const betterCandidate = result.logoCandidates
-            .filter(c => !isThirdParty(c.url) && c.score >= 40)
+            .filter(c => !isThirdParty(c.url) && !isLikelyPhoto(c.url) && c.score >= 40)
             .map(c => ({ ...c, nameMatches: getFilenameMatchCount(c.url) }))
             .filter(c => c.nameMatches >= 2 && c.nameMatches > bestMatchCount)
             .sort((a, b) => b.nameMatches - a.nameMatches || b.score - a.score)[0]
