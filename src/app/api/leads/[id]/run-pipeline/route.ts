@@ -111,11 +111,15 @@ export async function POST(
             updateData.logo_url = logoUrlData.publicUrl
             console.log(`[Pipeline] Logo uploaded: ${logoUrlData.publicUrl}`)
           }
-          updateData.logo_source = ep.logo.source
+          // Map source to allowed DB values: website, instagram, google, generated
+          const srcMap: Record<string, string> = { 'apple-touch-icon': 'website', 'header-logo': 'website', 'favicon': 'website', 'link-icon': 'website', 'og-image': 'website', 'footer-logo': 'website', 'inline-svg': 'website', 'ai-picked': 'website' }
+          updateData.logo_source = srcMap[ep.logo.source] || ((['website','instagram','google','generated'].includes(ep.logo.source)) ? ep.logo.source : 'website')
         } catch (err) {
           console.log(`[Pipeline] Logo upload error: ${err instanceof Error ? err.message : err}`)
           updateData.logo_url = scrapeData.bestLogo?.url || lead.logo_url
-          updateData.logo_source = ep.logo.source || lead.logo_source
+          // Map source to allowed DB values: website, instagram, google, generated
+          const srcMap: Record<string, string> = { 'apple-touch-icon': 'website', 'header-logo': 'website', 'favicon': 'website', 'link-icon': 'website', 'og-image': 'website', 'footer-logo': 'website', 'inline-svg': 'website', 'ai-picked': 'website' }
+          updateData.logo_source = srcMap[ep.logo.source] || ((['website','instagram','google','generated'].includes(ep.logo.source)) ? ep.logo.source : 'website') || lead.logo_source
         }
       } else {
         console.log(`[Pipeline] No logo base64 in enrichment preview`)
