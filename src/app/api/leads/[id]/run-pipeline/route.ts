@@ -66,6 +66,7 @@ export async function POST(
       ? `${request.headers.get('x-forwarded-proto') || 'https'}://${request.headers.get('host')}`
       : baseUrl
 
+    console.log(`[Pipeline] Calling scraper: ${scrapeOrigin}/api/tools/scrape`)
     const scrapeRes = await fetch(`${scrapeOrigin}/api/tools/scrape`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -73,12 +74,17 @@ export async function POST(
     })
 
     const scrapeData = await scrapeRes.json()
+    console.log(`[Pipeline] Scrape response: ok=${scrapeRes.ok}, hasEP=${!!scrapeData.enrichmentPreview}, hasLogo=${!!scrapeData.enrichmentPreview?.logo}, passPreview=${JSON.stringify(scrapeData.enrichmentPreview?.passPreview)}`)
 
     if (!scrapeRes.ok) {
       steps.scrape = { success: false, error: scrapeData.error || 'Scrape failed' }
     } else {
       const ep = scrapeData.enrichmentPreview
       const impressum = scrapeData.impressum
+
+      if (!ep) {
+        console.log(`[Pipeline] WARNING: No enrichmentPreview in scrape response!`)
+      }
 
       // Update lead with enrichment data
       const updateData: Record<string, unknown> = {
@@ -91,21 +97,28 @@ export async function POST(
 
       if (ep?.logo?.base64) {
         // Upload the FINAL logo (after contrast swap) to storage
-        // This is the actual logo that will be used — not the original bestLogo
         try {
           const logoBuffer = Buffer.from(ep.logo.base64, 'base64')
           const logoPath = `lead-logos/${id}.png`
-          await supabase.storage.from('scrape-cache').upload(logoPath, logoBuffer, {
+          const { error: upErr } = await supabase.storage.from('scrape-cache').upload(logoPath, logoBuffer, {
             contentType: 'image/png', upsert: true,
           })
-          const { data: logoUrlData } = supabase.storage.from('scrape-cache').getPublicUrl(logoPath)
-          updateData.logo_url = logoUrlData.publicUrl
+          if (upErr) {
+            console.log(`[Pipeline] Logo upload failed: ${upErr.message}`)
+            updateData.logo_url = scrapeData.bestLogo?.url || lead.logo_url
+          } else {
+            const { data: logoUrlData } = supabase.storage.from('scrape-cache').getPublicUrl(logoPath)
+            updateData.logo_url = logoUrlData.publicUrl
+            console.log(`[Pipeline] Logo uploaded: ${logoUrlData.publicUrl}`)
+          }
           updateData.logo_source = ep.logo.source
-        } catch {
-          // Fallback to bestLogo URL
+        } catch (err) {
+          console.log(`[Pipeline] Logo upload error: ${err instanceof Error ? err.message : err}`)
           updateData.logo_url = scrapeData.bestLogo?.url || lead.logo_url
           updateData.logo_source = ep.logo.source || lead.logo_source
         }
+      } else {
+        console.log(`[Pipeline] No logo base64 in enrichment preview`)
       }
       if (ep?.passPreview) {
         updateData.dominant_color = ep.passPreview.bg
@@ -129,7 +142,10 @@ export async function POST(
         website_about: scrapeData.websiteAbout || existingExtra.website_about,
       }
 
-      await supabase.from('leads').update(updateData).eq('id', id)
+      console.log(`[Pipeline] Updating lead with: logo_url=${updateData.logo_url ? 'set' : 'null'}, dominant_color=${updateData.dominant_color}, label_color=${updateData.label_color}, accent_color=${updateData.accent_color}, contact_name=${updateData.contact_name}`)
+      const { error: updateErr } = await supabase.from('leads').update(updateData).eq('id', id)
+      if (updateErr) console.log(`[Pipeline] Lead update FAILED: ${updateErr.message}`)
+      else console.log(`[Pipeline] Lead updated successfully`)
 
       steps.scrape = {
         success: true,
