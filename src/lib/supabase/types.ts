@@ -564,6 +564,7 @@ export type Lead = {
   email_subject: string | null
   email_body: string | null
   email_variant: string | null
+  email_variants: Record<string, { subject: string; body: string }> | null
   email_strategy: EmailStrategy | null
   email_sent_at: string | null
   email_opened_at: string | null

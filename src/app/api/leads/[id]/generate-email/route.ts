@@ -76,7 +76,16 @@ export async function POST(
         }
       }
 
-      // Save the first (curiosity) as default
+      // Persist all variants + save first as default
+      const variants: Record<string, { subject: string; body: string }> = {}
+      for (const r of results) {
+        if ('subject' in r && 'body' in r && 'strategy' in r) {
+          variants[(r as { strategy: string }).strategy] = {
+            subject: (r as { subject: string }).subject,
+            body: (r as { body: string }).body,
+          }
+        }
+      }
       const first = results[0]
       if (first && 'subject' in first) {
         await supabase.from('leads').update({
@@ -84,6 +93,7 @@ export async function POST(
           email_body: first.body,
           email_strategy: first.strategy,
           email_status: 'review',
+          email_variants: variants,
         }).eq('id', id)
       }
 

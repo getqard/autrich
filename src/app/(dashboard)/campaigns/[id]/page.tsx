@@ -5,7 +5,8 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Upload, Loader2, CheckCircle2, XCircle,
-  AlertTriangle, FileSpreadsheet, Users
+  AlertTriangle, FileSpreadsheet, Users, Play, Square,
+  Zap, ClipboardCheck
 } from 'lucide-react'
 
 type CampaignDetail = {
@@ -51,6 +52,94 @@ export default function CampaignDetailPage() {
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
+
+  // Batch Pipeline state
+  type BatchProgress = {
+    status: 'idle' | 'running' | 'completed' | 'failed'
+    total: number
+    completed: number
+    failed: number
+    current_lead_name?: string
+    leads?: { total: number; pending: number; ready_for_review: number }
+    remaining?: number
+    failed_leads?: Array<{ id: string; name: string; error: string }>
+  }
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
+  const [batchLoading, setBatchLoading] = useState(false)
+
+  const loadBatchProgress = useCallback(async () => {
+    const res = await fetch(`/api/campaigns/${id}/batch-pipeline`)
+    if (res.ok) {
+      const data = await res.json()
+      setBatchProgress(data)
+      return data as BatchProgress
+    }
+    return null
+  }, [id])
+
+  async function startBatch() {
+    setBatchLoading(true)
+    try {
+      const res = await fetch(`/api/campaigns/${id}/batch-pipeline`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      })
+      const data = await res.json()
+      setBatchProgress(data)
+    } catch {
+      // ignore
+    }
+    setBatchLoading(false)
+  }
+
+  async function continueBatch() {
+    const res = await fetch(`/api/campaigns/${id}/batch-pipeline`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'continue' }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setBatchProgress(data)
+    }
+  }
+
+  async function stopBatch() {
+    await fetch(`/api/campaigns/${id}/batch-pipeline`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'stop' }),
+    })
+    await loadBatchProgress()
+  }
+
+  // Poll batch progress + auto-continue
+  useEffect(() => {
+    if (!batchProgress || batchProgress.status !== 'running') return
+
+    const interval = setInterval(async () => {
+      const progress = await loadBatchProgress()
+      if (progress?.status === 'running' && (progress.remaining ?? 1) > 0) {
+        // Trigger next chunk
+        continueBatch()
+      }
+      if (progress?.status === 'completed' || progress?.status === 'idle') {
+        loadCampaign()
+      }
+    }, 5000)
+
+    return () => clearInterval(interval)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchProgress?.status])
+
+  // Initial batch progress load
+  useEffect(() => {
+    if (campaign && campaign.total_leads > 0) {
+      loadBatchProgress()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign?.id])
 
   const loadCampaign = useCallback(async () => {
     const res = await fetch(`/api/campaigns/${id}`)
@@ -301,6 +390,122 @@ export default function CampaignDetailPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ═══ Batch Pipeline ═══ */}
+      {campaign.total_leads > 0 && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 mt-6">
+          <h3 className="font-semibold mb-4 flex items-center gap-2">
+            <Zap size={18} /> Batch Pipeline
+          </h3>
+
+          {/* Progress Bar */}
+          {batchProgress && batchProgress.status !== 'idle' && batchProgress.total > 0 && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between text-sm mb-2">
+                <span className="text-zinc-400">
+                  {batchProgress.completed + batchProgress.failed} / {batchProgress.total} verarbeitet
+                  {batchProgress.current_lead_name && batchProgress.status === 'running' && (
+                    <span className="text-zinc-600"> — {batchProgress.current_lead_name}</span>
+                  )}
+                </span>
+                <span className="text-zinc-500">
+                  {batchProgress.failed > 0 && (
+                    <span className="text-red-400">{batchProgress.failed} Fehler</span>
+                  )}
+                </span>
+              </div>
+              <div className="w-full bg-zinc-800 rounded-full h-3 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    batchProgress.status === 'completed' ? 'bg-green-500' :
+                    batchProgress.status === 'failed' ? 'bg-red-500' : 'bg-blue-500'
+                  }`}
+                  style={{ width: `${batchProgress.total > 0 ? ((batchProgress.completed + batchProgress.failed) / batchProgress.total * 100) : 0}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Status Messages */}
+          {batchProgress?.status === 'completed' && (
+            <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4 mb-4">
+              <p className="text-green-400 text-sm flex items-center gap-2">
+                <CheckCircle2 size={16} />
+                Pipeline abgeschlossen: {batchProgress.completed} erfolgreich
+                {batchProgress.failed > 0 && `, ${batchProgress.failed} fehlgeschlagen`}
+              </p>
+            </div>
+          )}
+
+          {/* Failed Leads */}
+          {batchProgress?.failed_leads && batchProgress.failed_leads.length > 0 && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mb-4 max-h-32 overflow-auto">
+              <p className="text-xs text-red-400 mb-2">Fehlgeschlagene Leads:</p>
+              {batchProgress.failed_leads.map((fl, i) => (
+                <div key={i} className="text-xs text-zinc-400 py-0.5">
+                  {fl.name}: {fl.error}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Lead Counts */}
+          {batchProgress?.leads && (
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className="bg-zinc-800 rounded-lg p-3 text-center">
+                <div className="text-lg font-bold">{batchProgress.leads.total}</div>
+                <div className="text-xs text-zinc-500">Gesamt</div>
+              </div>
+              <div className="bg-yellow-500/10 rounded-lg p-3 text-center">
+                <div className="text-lg font-bold text-yellow-400">{batchProgress.leads.pending}</div>
+                <div className="text-xs text-zinc-500">Ausstehend</div>
+              </div>
+              <div className="bg-green-500/10 rounded-lg p-3 text-center">
+                <div className="text-lg font-bold text-green-400">{batchProgress.leads.ready_for_review}</div>
+                <div className="text-xs text-zinc-500">Bereit zum Review</div>
+              </div>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex items-center gap-3">
+            {(!batchProgress || batchProgress.status === 'idle' || batchProgress.status === 'completed') && (
+              <button
+                onClick={startBatch}
+                disabled={batchLoading}
+                className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                {batchLoading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+                {batchProgress?.status === 'completed' ? 'Nochmal starten' : 'Pipeline starten'}
+              </button>
+            )}
+
+            {batchProgress?.status === 'running' && (
+              <button
+                onClick={stopBatch}
+                className="flex items-center gap-2 px-5 py-2.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg text-sm font-medium transition-colors"
+              >
+                <Square size={16} /> Stoppen
+              </button>
+            )}
+
+            {batchProgress?.status === 'running' && (
+              <div className="flex items-center gap-2 text-sm text-zinc-500">
+                <Loader2 size={14} className="animate-spin" /> Wird verarbeitet...
+              </div>
+            )}
+
+            {batchProgress && batchProgress.leads && batchProgress.leads.ready_for_review > 0 && (
+              <Link
+                href={`/campaigns/${id}/review`}
+                className="flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors ml-auto"
+              >
+                <ClipboardCheck size={16} /> Review starten ({batchProgress.leads.ready_for_review})
+              </Link>
+            )}
+          </div>
         </div>
       )}
     </div>

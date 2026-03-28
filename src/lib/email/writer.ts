@@ -106,7 +106,14 @@ export async function writeEmail(input: EmailInput): Promise<EmailOutput> {
   if (input.website_about) contextParts.push(`Über das Geschäft: ${input.website_about}`)
   else if (input.website_description) contextParts.push(`Beschreibung: ${input.website_description}`)
   if (input.website_headlines) contextParts.push(`Website-Headlines: ${input.website_headlines}`)
-  if (input.google_rating) contextParts.push(`Google: ${input.google_rating} Sterne, ${input.google_reviews_count || '?'} Bewertungen`)
+  // Rating-Filter: Nur erwaehnen wenn >=4.5 Sterne UND >=200 Reviews
+  const ratingQualifies = !!(input.google_rating && input.google_rating >= 4.5
+    && input.google_reviews_count && input.google_reviews_count >= 200)
+  if (ratingQualifies) {
+    contextParts.push(`Google: ${input.google_rating} Sterne, ${input.google_reviews_count} Bewertungen`)
+  } else if (input.google_rating) {
+    console.log(`[Email] Rating filter ACTIVE: ${input.google_rating}★, ${input.google_reviews_count || 0} Reviews — not included in email`)
+  }
   if (input.founding_year) contextParts.push(`Gegründet: ${input.founding_year}`)
   if (input.has_existing_loyalty) contextParts.push('Hat bereits eine Treuekarte/Stempelkarte')
   if (input.has_app) contextParts.push('Hat eine eigene App')
@@ -127,7 +134,9 @@ ${contextParts.join('\n')}
 ${hooksBlock}
 ${notesBlock}
 
-${STRATEGY_PROMPTS[input.strategy]}
+${STRATEGY_PROMPTS[input.strategy]}${!ratingQualifies && input.strategy === 'social_proof'
+    ? '\nWICHTIG: Erwähne KEINE Google-Bewertungen, Sterne oder Reviews. Nutze stattdessen: Gründungsjahr, Instagram-Follower, Standort, oder das Geschäft selbst als Social Proof.'
+    : !ratingQualifies ? '\nErwähne keine Google-Bewertungen.' : ''}
 
 LINK zur Demo-Treuekarte: ${input.download_url}
 ${input.detected_reward ? `Prämie auf der Karte: ${input.detected_reward}` : ''}
