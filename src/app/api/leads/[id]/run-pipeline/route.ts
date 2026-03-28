@@ -89,15 +89,30 @@ export async function POST(
         has_app: scrapeData.appDetected || lead.has_app,
       }
 
-      if (ep?.logo) {
-        updateData.logo_url = scrapeData.bestLogo?.url || lead.logo_url
-        updateData.logo_source = ep.logo.source || lead.logo_source
+      if (ep?.logo?.base64) {
+        // Upload the FINAL logo (after contrast swap) to storage
+        // This is the actual logo that will be used — not the original bestLogo
+        try {
+          const logoBuffer = Buffer.from(ep.logo.base64, 'base64')
+          const logoPath = `lead-logos/${id}.png`
+          await supabase.storage.from('scrape-cache').upload(logoPath, logoBuffer, {
+            contentType: 'image/png', upsert: true,
+          })
+          const { data: logoUrlData } = supabase.storage.from('scrape-cache').getPublicUrl(logoPath)
+          updateData.logo_url = logoUrlData.publicUrl
+          updateData.logo_source = ep.logo.source
+        } catch {
+          // Fallback to bestLogo URL
+          updateData.logo_url = scrapeData.bestLogo?.url || lead.logo_url
+          updateData.logo_source = ep.logo.source || lead.logo_source
+        }
       }
       if (ep?.passPreview) {
         updateData.dominant_color = ep.passPreview.bg
         updateData.text_color = ep.passPreview.text
         updateData.label_color = ep.passPreview.label
-        updateData.accent_color = ep.colors?.accent || null
+        // accent_color = label color (the actual brand accent), NOT palette color
+        updateData.accent_color = ep.passPreview.label
       }
       if (impressum?.contactName && !lead.contact_name) {
         updateData.contact_name = impressum.contactName
