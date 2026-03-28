@@ -58,7 +58,7 @@ export async function POST(
       business_name: lead.business_name,
       gmaps_category: gmapsExtra.gmaps_category || lead.industry || null,
       gmaps_categories: gmapsExtra.gmaps_categories || [],
-      force: false,
+      force: true, // Always fresh — cached data might have old color/logo logic
     }
 
     // Call our own scrape endpoint internally
