@@ -28,7 +28,7 @@ export async function POST(
     }
 
     const typedLead = lead as Lead
-    const downloadBaseUrl = process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
+    const downloadBaseUrl = process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || 'https://deine-treuekarte.de'
     const downloadUrl = typedLead.download_page_slug
       ? `${downloadBaseUrl}/d/${typedLead.download_page_slug}`
       : downloadBaseUrl

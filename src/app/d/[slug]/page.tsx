@@ -66,8 +66,8 @@ export default async function DownloadPage({ params }: { params: Promise<{ slug:
   // Short business name: "2A Studio | Toller Stil..." → "2A Studio"
   const shortName = lead.business_name.split(/\s*[|–—\-:]\s*/)[0].trim() || lead.business_name
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
-  const pageUrl = `${baseUrl}/d/${slug}`
+  const downloadBaseUrl = process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || 'https://deine-treuekarte.de'
+  const pageUrl = `${downloadBaseUrl}/d/${slug}`
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(pageUrl)}&bgcolor=ffffff&color=000000`
 
   return (

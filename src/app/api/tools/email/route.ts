@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
         email_hooks: email_hooks || [],
         personalization_notes,
         detected_reward,
-        download_url: download_url || 'https://autrich.vercel.app/d/demo',
+        download_url: download_url || 'https://deine-treuekarte.de/d/demo',
         strategy,
         formal,
       })

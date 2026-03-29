@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 /**
  * Domain-based routing middleware.
  *
- * erfolgssinn.de (Download-Domain):
+ * deine-treuekarte.de (Download-Domain):
  *   → Only /d/*, /api/passes/*, /api/tracking, /api/webhooks/* allowed
  *   → Everything else → 404
  *
@@ -11,7 +11,7 @@ import { NextResponse, type NextRequest } from 'next/server'
  *   → Everything allowed
  */
 
-const DOWNLOAD_DOMAINS = ['erfolgssinn.de', 'www.erfolgssinn.de']
+const DOWNLOAD_DOMAINS = ['deine-treuekarte.de', 'www.deine-treuekarte.de']
 
 export function middleware(request: NextRequest) {
   const hostname = request.headers.get('host') || ''

@@ -73,7 +73,7 @@ export default function EmailPage() {
         email_hooks: [hook1, hook2, hook3].filter(Boolean),
         personalization_notes: notes || null,
         detected_reward: reward || null,
-        download_url: downloadUrl || `https://autrich.vercel.app/d/demo`,
+        download_url: downloadUrl || `https://deine-treuekarte.de/d/demo`,
         strategy: strat || strategy,
         formal,
       }
@@ -117,7 +117,7 @@ export default function EmailPage() {
         email_hooks: [hook1, hook2, hook3].filter(Boolean),
         personalization_notes: notes || null,
         detected_reward: reward || null,
-        download_url: downloadUrl || `https://autrich.vercel.app/d/demo`,
+        download_url: downloadUrl || `https://deine-treuekarte.de/d/demo`,
         formal,
       }
 
@@ -188,7 +188,7 @@ export default function EmailPage() {
           <Input label="Personalization Notes" value={notes} onChange={setNotes} placeholder="Betont Tradition + Community" />
           <Input label="Prämie" value={reward} onChange={setReward} placeholder="1 Gratis Döner" />
         </div>
-        <Input label="Download-Link" value={downloadUrl} onChange={setDownloadUrl} placeholder="https://autrich.vercel.app/d/doener-palace" />
+        <Input label="Download-Link" value={downloadUrl} onChange={setDownloadUrl} placeholder="https://deine-treuekarte.de/d/doener-palace" />
 
         <div className="flex items-center gap-3">
           <label className="text-xs text-zinc-400 flex items-center gap-2 cursor-pointer">
