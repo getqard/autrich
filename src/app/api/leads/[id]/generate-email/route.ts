@@ -28,10 +28,10 @@ export async function POST(
     }
 
     const typedLead = lead as Lead
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
+    const downloadBaseUrl = process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
     const downloadUrl = typedLead.download_page_slug
-      ? `${baseUrl}/d/${typedLead.download_page_slug}`
-      : baseUrl
+      ? `${downloadBaseUrl}/d/${typedLead.download_page_slug}`
+      : downloadBaseUrl
 
     // Parse extra_data for enrichment
     const extra = (typedLead.extra_data || {}) as Record<string, unknown>
