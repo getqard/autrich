@@ -32,6 +32,7 @@ export async function generatePassesForLead(lead: Lead): Promise<PassGenerationR
   const serial = lead.pass_serial || randomUUID()
   const authToken = lead.pass_auth_token || randomUUID()
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
+  const downloadBaseUrl = process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || baseUrl
   const supabase = createServiceClient()
 
   // ─── Fetch Logo ──────────────────────────────────────────
@@ -91,8 +92,8 @@ export async function generatePassesForLead(lead: Lead): Promise<PassGenerationR
 
   // ─── Build Pass Data ─────────────────────────────────────
   const barcodeUrl = lead.download_page_slug
-    ? `${baseUrl}/d/${lead.download_page_slug}`
-    : baseUrl
+    ? `${downloadBaseUrl}/d/${lead.download_page_slug}`
+    : downloadBaseUrl
 
   const commonData = {
     serial,

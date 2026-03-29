@@ -398,7 +398,7 @@ export default function ReviewPage() {
               {/* Download Page Link */}
               {lead.download_page_slug && (
                 <a
-                  href={`/d/${lead.download_page_slug}`}
+                  href={`https://deine-treuekarte.de/d/${lead.download_page_slug}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="block mt-3 text-[10px] text-zinc-600 hover:text-zinc-400 truncate"

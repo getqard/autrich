@@ -60,8 +60,8 @@ export async function POST(request: NextRequest) {
 
         const serial = randomUUID()
         const authToken = randomUUID()
-        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
-        const barcodeUrl = `${baseUrl}/d/demo-${serial.substring(0, 8)}`
+        const downloadBaseUrl = process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || 'https://deine-treuekarte.de'
+        const barcodeUrl = `${downloadBaseUrl}/d/demo-${serial.substring(0, 8)}`
 
         // Fetch logo as buffer
         let logoBuffer: Buffer | null = null

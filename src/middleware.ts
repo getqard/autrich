@@ -4,14 +4,22 @@ import { NextResponse, type NextRequest } from 'next/server'
  * Domain-based routing middleware.
  *
  * deine-treuekarte.de (Download-Domain):
- *   → Only /d/*, /api/passes/*, /api/tracking, /api/webhooks/* allowed
- *   → Everything else → 404
+ *   → /d/*              Download pages
+ *   → /api/passes/*     Pass downloads
+ *   → /api/tracking     Click/visit tracking
+ *   → /api/webhooks/*   Instantly webhooks
+ *   → /_next/*          Next.js assets (JS, CSS)
+ *   → /*.svg|png|webp   Public static assets (wallet badges, WhatsApp icon, etc.)
+ *   → Everything else   → 404
  *
  * autrich.vercel.app / localhost (Platform):
  *   → Everything allowed
  */
 
 const DOWNLOAD_DOMAINS = ['deine-treuekarte.de', 'www.deine-treuekarte.de']
+
+// Static asset extensions served from /public
+const STATIC_ASSET_PATTERN = /\.(svg|png|jpg|jpeg|webp|ico|gif|woff2?|ttf|css|js)$/i
 
 export function middleware(request: NextRequest) {
   const hostname = request.headers.get('host') || ''
@@ -27,10 +35,10 @@ export function middleware(request: NextRequest) {
       path.startsWith('/api/webhooks/') ||
       path.startsWith('/_next/') ||
       path === '/favicon.ico' ||
-      path === '/robots.txt'
+      path === '/robots.txt' ||
+      STATIC_ASSET_PATTERN.test(path) // Allow all static assets (SVG, PNG, WebP, etc.)
 
     if (!allowed) {
-      // Return a simple 404 page
       return new NextResponse(
         '<html><body style="background:#0a0a0a;color:#666;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui"><p>Seite nicht gefunden</p></body></html>',
         { status: 404, headers: { 'Content-Type': 'text/html' } }

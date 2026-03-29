@@ -174,7 +174,8 @@ export function generateGoogleSaveLink(input: GooglePassInput): GoogleSaveLinkRe
 
   // Build and sign JWT
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
-  const origins = [baseUrl, 'https://autrich.vercel.app', 'http://localhost:3000']
+  const downloadUrl = process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || 'https://deine-treuekarte.de'
+  const origins = [baseUrl, downloadUrl, 'https://autrich.vercel.app', 'https://deine-treuekarte.de', 'https://www.deine-treuekarte.de', 'http://localhost:3000']
     .filter((v, i, a) => a.indexOf(v) === i) // dedupe
 
   const claims = {

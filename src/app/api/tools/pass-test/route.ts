@@ -81,7 +81,7 @@ export async function GET() {
     })
 
     pass.setBarcodes({
-      message: 'https://autrich.vercel.app',
+      message: process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || 'https://deine-treuekarte.de',
       format: 'PKBarcodeFormatQR',
       messageEncoding: 'iso-8859-1',
     })

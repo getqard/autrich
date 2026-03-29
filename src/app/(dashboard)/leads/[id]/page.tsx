@@ -465,7 +465,7 @@ export default function LeadDetailPage() {
           <Section title="Actions">
             {lead.download_page_slug && (
               <a
-                href={`/d/${lead.download_page_slug}`}
+                href={`https://deine-treuekarte.de/d/${lead.download_page_slug}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 px-3 py-2 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 mb-2 w-full"
