@@ -178,6 +178,11 @@ export interface Database {
         }
         Update: Partial<Database['public']['Tables']['settings']['Insert']>
       }
+      email_events: {
+        Row: EmailEvent
+        Insert: EmailEventInsert
+        Update: Partial<EmailEventInsert>
+      }
     }
     Views: Record<string, never>
     Functions: Record<string, never>
@@ -455,6 +460,12 @@ export type Campaign = {
   lead_filter: LeadFilter
   lead_count_matched: number
   industry_id: string | null
+  // Instantly-Sync & Pause (Block 1 additions)
+  instantly_campaign_id: string | null
+  is_paused: boolean
+  paused_reason: string | null
+  ab_test_complete: boolean
+  sending_started_at: string | null
   created_at: string
   updated_at: string
 }
@@ -469,6 +480,11 @@ export type CampaignInsert = {
   lead_filter?: LeadFilter
   lead_count_matched?: number
   industry_id?: string | null
+  instantly_campaign_id?: string | null
+  is_paused?: boolean
+  paused_reason?: string | null
+  ab_test_complete?: boolean
+  sending_started_at?: string | null
 }
 
 export type LeadFilter = {
@@ -567,11 +583,22 @@ export type Lead = {
   email_variants: Record<string, { subject: string; body: string }> | null
   email_strategy: EmailStrategy | null
   email_sent_at: string | null
+  last_email_sent_at: string | null
   email_opened_at: string | null
   email_clicked_at: string | null
   email_replied_at: string | null
   instantly_lead_id: string | null
   instantly_campaign_id: string | null
+  // A/B-Test (Block 1)
+  ab_group: EmailStrategy | null
+  ab_group_override: boolean
+  // Follow-up-Content vorgeneriert (Block 1)
+  email_followup1_subject: string | null
+  email_followup1_body: string | null
+  email_followup2_subject: string | null
+  email_followup2_body: string | null
+  // Mockup (Block 4)
+  mockup_png_url: string | null
   // Reply
   reply_text: string | null
   reply_category: ReplyCategory | null
@@ -736,6 +763,35 @@ export type StripTemplateInsert = {
   storage_path?: string | null
   prompt_used?: string | null
 }
+
+// ============================================
+// DOMAIN TYPES — Email Events (Instantly Webhooks)
+// ============================================
+
+export type EmailEventType =
+  | 'sent' | 'opened' | 'clicked' | 'replied' | 'bounced' | 'unsubscribed'
+
+export type EmailEvent = {
+  id: string
+  lead_id: string
+  campaign_id: string | null
+  event_type: EmailEventType
+  instantly_event_id: string | null
+  metadata: Json
+  occurred_at: string
+  created_at: string
+}
+
+export type EmailEventInsert = {
+  id?: string
+  lead_id: string
+  campaign_id?: string | null
+  event_type: EmailEventType
+  instantly_event_id?: string | null
+  metadata?: Json
+  occurred_at: string
+}
+
 export type TrackingEventType =
   | 'email_sent' | 'email_opened' | 'email_clicked'
   | 'page_visited' | 'page_visited_desktop' | 'page_visited_mobile'
