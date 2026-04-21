@@ -182,8 +182,8 @@ Diese Entscheidungen hat Lano getroffen. Claude soll sie in jedem Block als Grun
 
 | Block | Status | Start-Prompt (siehe jeweiligen Abschnitt) |
 |-------|--------|-------------------------------------------|
-| 1. DB-Migrationen | ⬜ Offen | `Starte Block 1: DB-Migrationen aus MASTERPLAN.md.` |
-| 2. A/B Testing Umstellung | ⬜ Offen | `Starte Block 2: A/B Testing Umstellung aus MASTERPLAN.md.` |
+| 1. DB-Migrationen | ✅ Fertig (`27287b6`) | `Starte Block 1: DB-Migrationen aus MASTERPLAN.md.` |
+| 2. A/B Testing Umstellung | ✅ Fertig (`c2d6f36`) | `Starte Block 2: A/B Testing Umstellung aus MASTERPLAN.md.` |
 | 3. Swipe-Infrastruktur | ⬜ Offen | `Starte Block 3: Swipe-Infrastruktur aus MASTERPLAN.md.` |
 | 4. Mockup-Generator | ⬜ Offen | `Starte Block 4: Mockup-Generator aus MASTERPLAN.md.` |
 | 5. Impressum & Footer | ⬜ Offen | `Starte Block 5: Impressum & Footer aus MASTERPLAN.md.` |
