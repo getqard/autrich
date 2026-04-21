@@ -1,13 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { writeEmail, type EmailStrategy } from '@/lib/email/writer'
-import type { Lead } from '@/lib/supabase/types'
+import { writeEmail } from '@/lib/email/writer'
+import type { EmailStrategy, Lead } from '@/lib/supabase/types'
 
 /**
  * POST /api/leads/[id]/generate-email
  *
  * Generate a cold email for a specific lead.
- * Optionally: ?all=true to generate all 5 strategies.
+ * Body:
+ *   { strategy?: EmailStrategy, persist?: boolean, all?: boolean }
+ *
+ * Behavior:
+ * - Default: generate single email for the lead's `ab_group` (or 'curiosity' fallback).
+ * - With `strategy`: generate that strategy. If persist=true (default), the new
+ *   variant is merged into `email_variants`, becomes the active subject/body/strategy,
+ *   and `ab_group_override = true` is set when strategy ≠ ab_group.
+ * - `all=true`: legacy fan-out generating all 5 strategies (used by old flows /
+ *   re-enrich button). Does not touch ab_group_override.
  */
 export async function POST(
   request: NextRequest,
@@ -100,17 +109,34 @@ export async function POST(
       return NextResponse.json({ results })
     }
 
-    // Single strategy
-    const strategy = (body.strategy as EmailStrategy) || 'curiosity'
+    // Single strategy — default to lead.ab_group, fallback 'curiosity'
+    const strategy = (body.strategy as EmailStrategy) || typedLead.ab_group || 'curiosity'
+    const persist = body.persist !== false // default true
     const result = await writeEmail({ ...emailInput, strategy })
 
-    // Save to lead
-    await supabase.from('leads').update({
-      email_subject: result.subject,
-      email_body: result.body,
-      email_strategy: result.strategy,
-      email_status: 'review',
-    }).eq('id', id)
+    if (persist) {
+      // Merge new variant into existing variants (preserve old strategies on legacy leads)
+      const existingVariants = (typedLead.email_variants || {}) as Record<string, { subject: string; body: string }>
+      const variants = {
+        ...existingVariants,
+        [strategy]: { subject: result.subject, body: result.body },
+      }
+
+      const updateData: Record<string, unknown> = {
+        email_subject: result.subject,
+        email_body: result.body,
+        email_strategy: result.strategy,
+        email_status: 'review',
+        email_variants: variants,
+      }
+
+      // Override-Flag setzen, wenn die regenerierte Strategie nicht der ab_group entspricht
+      if (typedLead.ab_group && strategy !== typedLead.ab_group) {
+        updateData.ab_group_override = true
+      }
+
+      await supabase.from('leads').update(updateData).eq('id', id)
+    }
 
     return NextResponse.json(result)
   } catch (err) {

@@ -38,6 +38,7 @@ export async function GET(
       detected_industry, detected_reward, detected_reward_emoji,
       detected_stamp_emoji, detected_pass_title, detected_max_stamps,
       email_subject, email_body, email_strategy, email_variants,
+      ab_group, ab_group_override,
       google_rating, google_reviews_count,
       contact_name, pass_status, email_status, lead_score,
       download_page_slug, pass_serial

@@ -4,8 +4,8 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ArrowLeft, ArrowRight, Loader2, Check, X, SkipForward,
-  Palette, ChevronDown, ChevronUp,
+  ArrowLeft, Loader2, Check, X, SkipForward,
+  Palette, ChevronDown, ChevronUp, Sparkles,
 } from 'lucide-react'
 
 type ReviewLead = {
@@ -30,6 +30,8 @@ type ReviewLead = {
   email_body: string | null
   email_strategy: string | null
   email_variants: Record<string, { subject: string; body: string }> | null
+  ab_group: string | null
+  ab_group_override: boolean
   google_rating: number | null
   google_reviews_count: number | null
   contact_name: string | null
@@ -62,6 +64,7 @@ export default function ReviewPage() {
   const [showColorEdit, setShowColorEdit] = useState(false)
   const [editColors, setEditColors] = useState({ bg: '', text: '', label: '' })
   const [colorSaving, setColorSaving] = useState(false)
+  const [regenerating, setRegenerating] = useState<string | null>(null)
 
   // Stats
   const [approved, setApproved] = useState(0)
@@ -86,12 +89,13 @@ export default function ReviewPage() {
 
   useEffect(() => { loadLeads() }, [loadLeads])
 
-  // Set selected strategy when lead changes
+  // Set selected strategy when lead changes — Default = ab_group, fallback email_strategy
   const lead = leads[currentIndex]
   useEffect(() => {
     if (lead) {
-      setSelectedStrategy(lead.email_strategy || 'curiosity')
+      setSelectedStrategy(lead.ab_group || lead.email_strategy || 'curiosity')
       setShowColorEdit(false)
+      setRegenerating(null)
       setEditColors({
         bg: lead.dominant_color || '#1a1a1a',
         text: lead.text_color || '#ffffff',
@@ -110,7 +114,7 @@ export default function ReviewPage() {
   // Keyboard shortcuts
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      if (actionLoading || !lead) return
+      if (actionLoading || regenerating || !lead) return
       // Ignore if typing in input
       if (e.target instanceof HTMLInputElement) return
 
@@ -138,7 +142,7 @@ export default function ReviewPage() {
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lead, actionLoading, selectedStrategy, currentIndex])
+  }, [lead, actionLoading, regenerating, selectedStrategy, currentIndex])
 
   async function handleApprove() {
     if (!lead || actionLoading) return
@@ -175,6 +179,37 @@ export default function ReviewPage() {
   function goNext() {
     if (currentIndex < leads.length - 1) {
       setCurrentIndex(i => i + 1)
+    }
+  }
+
+  async function handleRegenerate(strategy: string) {
+    if (!lead || regenerating || actionLoading) return
+    setRegenerating(strategy)
+    try {
+      const res = await fetch(`/api/leads/${lead.id}/generate-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strategy, persist: true }),
+      })
+      if (res.ok) {
+        const result = await res.json() as { subject: string; body: string }
+        setLeads(prev => prev.map((l, i) => {
+          if (i !== currentIndex) return l
+          const variants = { ...(l.email_variants || {}), [strategy]: { subject: result.subject, body: result.body } }
+          const overrideTriggered = !!l.ab_group && strategy !== l.ab_group
+          return {
+            ...l,
+            email_subject: result.subject,
+            email_body: result.body,
+            email_strategy: strategy,
+            email_variants: variants,
+            ab_group_override: l.ab_group_override || overrideTriggered,
+          }
+        }))
+        setSelectedStrategy(strategy)
+      }
+    } finally {
+      setRegenerating(null)
     }
   }
 
@@ -413,24 +448,28 @@ export default function ReviewPage() {
               <h3 className="text-sm font-semibold mb-4">Email-Vorschau</h3>
 
               {/* Strategy Tabs */}
-              <div className="flex gap-1.5 mb-4">
+              <div className="flex gap-1.5 mb-4 flex-wrap">
                 {STRATEGIES.map((s, i) => {
                   const hasVariant = lead.email_variants?.[s] != null
+                  const isAbGroup = s === lead.ab_group
+                  const isSelected = selectedStrategy === s
                   return (
                     <button
                       key={s}
                       onClick={() => setSelectedStrategy(s)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                        selectedStrategy === s
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                        isSelected
                           ? 'bg-blue-600 text-white'
                           : hasVariant
                             ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
-                            : 'bg-zinc-800/50 text-zinc-600 cursor-not-allowed'
+                            : 'bg-zinc-800/50 text-zinc-500 hover:bg-zinc-800/80 hover:text-zinc-300'
                       }`}
-                      disabled={!hasVariant && s !== lead.email_strategy}
+                      title={isAbGroup ? 'Zugewiesene A/B-Gruppe' : hasVariant ? 'Vorhandene Variante' : 'Klick zum Wechseln, dann generieren'}
                     >
-                      <span className="text-[10px] text-zinc-500 mr-1">{i + 1}</span>
+                      <span className="text-[10px] opacity-60">{i + 1}</span>
                       {STRATEGY_LABELS[s]}
+                      {isAbGroup && <span className="text-[9px] uppercase tracking-wide opacity-70">A/B</span>}
+                      {!hasVariant && <span className="text-[9px] opacity-50">(neu)</span>}
                     </button>
                   )
                 })}
@@ -449,16 +488,33 @@ export default function ReviewPage() {
                   </div>
                 </div>
               ) : (
-                <div className="bg-zinc-800 rounded-lg p-6 text-center">
-                  <p className="text-xs text-zinc-600">Keine Email fuer diese Strategie vorhanden</p>
+                <div className="bg-zinc-800 rounded-lg p-6 text-center space-y-3">
+                  <p className="text-xs text-zinc-500">Noch keine Email für „{STRATEGY_LABELS[selectedStrategy]}" generiert.</p>
+                  <button
+                    onClick={() => handleRegenerate(selectedStrategy)}
+                    disabled={regenerating !== null}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-xs font-medium disabled:opacity-50"
+                  >
+                    {regenerating === selectedStrategy ? (
+                      <><Loader2 size={12} className="animate-spin" /> Generiere…</>
+                    ) : (
+                      <><Sparkles size={12} /> Strategie wechseln &amp; neu generieren</>
+                    )}
+                  </button>
+                  {lead.ab_group && selectedStrategy !== lead.ab_group && (
+                    <p className="text-[10px] text-amber-400/80">Wird als Override markiert (aus A/B-Analyse ausgeschlossen)</p>
+                  )}
                 </div>
               )}
 
               {/* Strategy Info */}
               <p className="text-[10px] text-zinc-600 mt-3">
                 Strategie: <span className="text-zinc-400">{STRATEGY_LABELS[selectedStrategy]}</span>
-                {selectedStrategy !== lead.email_strategy && (
-                  <span className="text-amber-400 ml-2">(gewechselt von {STRATEGY_LABELS[lead.email_strategy || 'curiosity']})</span>
+                {lead.ab_group && (
+                  <span className="ml-2">· A/B: <span className="text-zinc-400">{STRATEGY_LABELS[lead.ab_group]}</span></span>
+                )}
+                {lead.ab_group_override && (
+                  <span className="text-amber-400 ml-2">(override)</span>
                 )}
               </p>
             </div>
@@ -488,7 +544,7 @@ export default function ReviewPage() {
 
             <button
               onClick={handleApprove}
-              disabled={actionLoading || !currentEmail}
+              disabled={actionLoading || regenerating !== null || !currentEmail}
               className="flex items-center gap-2 px-8 py-3 bg-green-600 hover:bg-green-500 text-white rounded-xl text-sm font-semibold transition-colors disabled:opacity-50 shadow-lg shadow-green-600/20"
             >
               {actionLoading ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}

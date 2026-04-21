@@ -26,7 +26,7 @@ export async function POST(
   }
 
   const { data: lead, error: fetchErr } = await supabase
-    .from('leads').select('email_subject, email_body, email_strategy, email_variants').eq('id', id).single()
+    .from('leads').select('email_subject, email_body, email_strategy, email_variants, ab_group, ab_group_override').eq('id', id).single()
 
   if (fetchErr || !lead) {
     return NextResponse.json({ error: 'Lead nicht gefunden' }, { status: 404 })
@@ -35,17 +35,31 @@ export async function POST(
   switch (body.action) {
     case 'approve': {
       const variants = (lead.email_variants || {}) as Record<string, { subject: string; body: string }>
-      const strategy = body.strategy || lead.email_strategy || 'curiosity'
+      const strategy = body.strategy || lead.email_strategy || lead.ab_group || 'curiosity'
       const chosen = variants[strategy] || { subject: lead.email_subject, body: lead.email_body }
 
-      await supabase.from('leads').update({
+      const updateData: Record<string, unknown> = {
         email_subject: chosen.subject,
         email_body: chosen.body,
         email_strategy: strategy,
         email_status: 'queued',
-      }).eq('id', id)
+      }
 
-      return NextResponse.json({ success: true, action: 'approve', strategy })
+      // Override-Tracking: ab_group_override = true, wenn die approved
+      // Strategie nicht der ursprünglich zugewiesenen ab_group entspricht.
+      // Einmal true, bleibt true (kein Re-Set auf false beim Zurückwechseln).
+      if (lead.ab_group && strategy !== lead.ab_group && !lead.ab_group_override) {
+        updateData.ab_group_override = true
+      }
+
+      await supabase.from('leads').update(updateData).eq('id', id)
+
+      return NextResponse.json({
+        success: true,
+        action: 'approve',
+        strategy,
+        ab_group_override: lead.ab_group ? strategy !== lead.ab_group : false,
+      })
     }
 
     case 'skip': {

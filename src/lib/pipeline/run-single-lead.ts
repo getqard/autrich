@@ -9,11 +9,12 @@
  * 2. AI Classification (industry, reward, hooks)
  * 3. Generate Download Page Slug
  * 4. Generate Pass (Apple + Google)
- * 5. Generate 5 Emails (all strategies)
+ * 5. A/B-Group zuweisen (counter-balanced) + 1 Email generieren
  */
 
 import { generatePassesForLead } from '@/lib/wallet/pass-data'
-import { writeEmail, type EmailStrategy } from '@/lib/email/writer'
+import { writeEmail } from '@/lib/email/writer'
+import { assignABGroup } from '@/lib/email/ab-assignment'
 import { classifyBusiness } from '@/lib/ai/classifier'
 import { INDUSTRIES } from '@/data/industries-seed'
 import { mapGmapsCategory } from '@/data/gmaps-category-map'
@@ -256,7 +257,7 @@ export async function runPipelineForLead(
       steps.pass = { success: false, error: err instanceof Error ? err.message : 'Failed' }
     }
 
-    // ═══ STEP 5: Generate 5 Emails ════════════════════════════════
+    // ═══ STEP 5: A/B-Group + 1 Email generieren ═══════════════════
     const emailStart = Date.now()
     try {
       const { data: finalLead } = await supabase.from('leads').select('*').eq('id', leadId).single()
@@ -264,6 +265,22 @@ export async function runPipelineForLead(
         const fl = finalLead as Lead
         const downloadUrl = fl.download_page_slug ? `${downloadBaseUrl}/d/${fl.download_page_slug}` : downloadBaseUrl
         const extra = (fl.extra_data || {}) as Record<string, unknown>
+
+        // A/B-Group zuweisen (counter-balanced pro Campaign), nur falls noch nicht gesetzt
+        let abGroup = fl.ab_group
+        let abAssignmentLog: string | null = null
+        if (!abGroup && fl.campaign_id) {
+          const assignment = await assignABGroup(fl.campaign_id, supabase)
+          abGroup = assignment.strategy
+          abAssignmentLog = `[Pipeline] Assigned ab_group: ${abGroup} for lead ${leadId} (campaign counts: ${JSON.stringify(assignment.counts)})`
+          console.log(abAssignmentLog)
+          await supabase.from('leads').update({ ab_group: abGroup }).eq('id', leadId)
+        } else if (abGroup) {
+          console.log(`[Pipeline] Re-using existing ab_group: ${abGroup} for lead ${leadId}`)
+        }
+
+        // Fallback falls Lead keine campaign_id hat (sollte nicht vorkommen)
+        const strategy = abGroup || 'curiosity'
 
         const emailInput = {
           business_name: fl.business_name,
@@ -285,45 +302,33 @@ export async function runPipelineForLead(
           detected_reward: fl.detected_reward || null,
           download_url: downloadUrl,
           formal: false,
+          strategy,
         }
 
-        const strategies: EmailStrategy[] = ['curiosity', 'social_proof', 'direct', 'storytelling', 'provocation']
-        const emails = []
-        for (const strategy of strategies) {
-          try {
-            const result = await writeEmail({ ...emailInput, strategy })
-            emails.push(result)
-          } catch (err) {
-            emails.push({ strategy, error: err instanceof Error ? err.message : 'Failed' })
-          }
+        const result = await writeEmail(emailInput)
+
+        // Bestehende Variants beibehalten (Rückwärtskompatibilität bei Pipeline-Re-Runs),
+        // neue ab_group-Variante hinzufügen.
+        const existingVariants = (fl.email_variants || {}) as Record<string, { subject: string; body: string }>
+        const variants = {
+          ...existingVariants,
+          [strategy]: { subject: result.subject, body: result.body },
         }
 
-        // Persist all 5 variants + save first (curiosity) as default
-        const variants: Record<string, { subject: string; body: string }> = {}
-        for (const email of emails) {
-          if ('subject' in email && 'body' in email && 'strategy' in email) {
-            variants[(email as { strategy: string }).strategy] = {
-              subject: (email as { subject: string }).subject,
-              body: (email as { body: string }).body,
-            }
-          }
-        }
-        const first = emails[0]
-        if (first && 'subject' in first && 'body' in first) {
-          await supabase.from('leads').update({
-            email_subject: first.subject,
-            email_body: first.body,
-            email_strategy: 'curiosity',
-            email_status: 'review',
-            email_variants: variants,
-          }).eq('id', leadId)
-        }
+        await supabase.from('leads').update({
+          email_subject: result.subject,
+          email_body: result.body,
+          email_strategy: strategy,
+          email_status: 'review',
+          email_variants: variants,
+        }).eq('id', leadId)
 
         steps.emails = {
           success: true,
           durationMs: Date.now() - emailStart,
-          count: emails.length,
-          results: emails,
+          count: 1,
+          ab_group: strategy,
+          results: [result],
         }
       }
     } catch (err) {
