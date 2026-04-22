@@ -6,7 +6,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Upload, Loader2, CheckCircle2, XCircle,
   AlertTriangle, FileSpreadsheet, Users, Play, Square,
-  Zap, ClipboardCheck
+  Zap, ClipboardCheck, Filter, Layers
 } from 'lucide-react'
 
 type CampaignDetail = {
@@ -60,9 +60,18 @@ export default function CampaignDetailPage() {
     completed: number
     failed: number
     current_lead_name?: string
-    leads?: { total: number; pending: number; ready_for_review: number }
+    current_phase?: 'enrichment' | 'pass_email'
+    leads?: {
+      total: number
+      pending: number
+      ready_for_review: number
+      awaiting_triage?: number
+      enrichment_queue?: number
+      awaiting_enrichment_review?: number
+      pass_email_queue?: number
+    }
     remaining?: number
-    failed_leads?: Array<{ id: string; name: string; error: string }>
+    failed_leads?: Array<{ id: string; name: string; error: string; phase?: string }>
   }
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
   const [batchLoading, setBatchLoading] = useState(false)
@@ -497,15 +506,111 @@ export default function CampaignDetailPage() {
               </div>
             )}
 
-            {batchProgress && batchProgress.leads && batchProgress.leads.ready_for_review > 0 && (
-              <Link
-                href={`/campaigns/${id}/review`}
-                className="flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors ml-auto"
-              >
-                <ClipboardCheck size={16} /> Review starten ({batchProgress.leads.ready_for_review})
-              </Link>
-            )}
           </div>
+        </div>
+      )}
+
+      {/* ═══ Swipe-Stages (Block 3) ═══ */}
+      {campaign.total_leads > 0 && batchProgress?.leads && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 mt-6">
+          <h3 className="font-semibold mb-4 flex items-center gap-2">
+            <Layers size={18} /> Swipe-Stages
+          </h3>
+          <p className="text-xs text-zinc-500 mb-4">
+            Leads durchlaufen 3 Stages mit manueller Freigabe. Batch-Pipeline verarbeitet nur approved Leads.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {/* Stage 1 — Triage */}
+            <Link
+              href={`/campaigns/${id}/triage`}
+              className={`group flex flex-col gap-2 p-4 rounded-lg border transition-colors ${
+                (batchProgress.leads.awaiting_triage ?? 0) > 0
+                  ? 'bg-blue-600/10 border-blue-500/30 hover:bg-blue-600/20'
+                  : 'bg-zinc-800/50 border-zinc-700 hover:bg-zinc-800'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Filter size={16} className="text-blue-400" />
+                <span className="text-xs text-zinc-400 font-medium">Stage 1</span>
+              </div>
+              <div>
+                <p className="text-sm font-semibold">Triage</p>
+                <p className="text-[11px] text-zinc-500 mt-0.5">Vor Enrichment · spart Tokens</p>
+              </div>
+              <div className="mt-auto flex items-baseline gap-1">
+                <span className={`text-2xl font-bold ${(batchProgress.leads.awaiting_triage ?? 0) > 0 ? 'text-blue-400' : 'text-zinc-600'}`}>
+                  {batchProgress.leads.awaiting_triage ?? 0}
+                </span>
+                <span className="text-xs text-zinc-500">zu triagen</span>
+              </div>
+            </Link>
+
+            {/* Stage 2 — Enrichment-Review */}
+            <Link
+              href={`/campaigns/${id}/enrichment-review`}
+              className={`group flex flex-col gap-2 p-4 rounded-lg border transition-colors ${
+                (batchProgress.leads.awaiting_enrichment_review ?? 0) > 0
+                  ? 'bg-amber-600/10 border-amber-500/30 hover:bg-amber-600/20'
+                  : 'bg-zinc-800/50 border-zinc-700 hover:bg-zinc-800'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Zap size={16} className="text-amber-400" />
+                <span className="text-xs text-zinc-400 font-medium">Stage 2</span>
+              </div>
+              <div>
+                <p className="text-sm font-semibold">Enrichment-Review</p>
+                <p className="text-[11px] text-zinc-500 mt-0.5">AI-Daten prüfen · Logo/Farben fixen</p>
+              </div>
+              <div className="mt-auto flex items-baseline gap-1">
+                <span className={`text-2xl font-bold ${(batchProgress.leads.awaiting_enrichment_review ?? 0) > 0 ? 'text-amber-400' : 'text-zinc-600'}`}>
+                  {batchProgress.leads.awaiting_enrichment_review ?? 0}
+                </span>
+                <span className="text-xs text-zinc-500">zu reviewen</span>
+              </div>
+            </Link>
+
+            {/* Stage 3 — Final Review */}
+            <Link
+              href={`/campaigns/${id}/review`}
+              className={`group flex flex-col gap-2 p-4 rounded-lg border transition-colors ${
+                batchProgress.leads.ready_for_review > 0
+                  ? 'bg-green-600/10 border-green-500/30 hover:bg-green-600/20'
+                  : 'bg-zinc-800/50 border-zinc-700 hover:bg-zinc-800'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <ClipboardCheck size={16} className="text-green-400" />
+                <span className="text-xs text-zinc-400 font-medium">Stage 3</span>
+              </div>
+              <div>
+                <p className="text-sm font-semibold">Final Review</p>
+                <p className="text-[11px] text-zinc-500 mt-0.5">Pass + Email · vor Send</p>
+              </div>
+              <div className="mt-auto flex items-baseline gap-1">
+                <span className={`text-2xl font-bold ${batchProgress.leads.ready_for_review > 0 ? 'text-green-400' : 'text-zinc-600'}`}>
+                  {batchProgress.leads.ready_for_review}
+                </span>
+                <span className="text-xs text-zinc-500">zum Freigeben</span>
+              </div>
+            </Link>
+          </div>
+
+          {/* Queue-Hinweis */}
+          {((batchProgress.leads.enrichment_queue ?? 0) > 0 || (batchProgress.leads.pass_email_queue ?? 0) > 0) && (
+            <div className="mt-4 text-xs text-zinc-500 flex items-center gap-4">
+              {(batchProgress.leads.enrichment_queue ?? 0) > 0 && (
+                <span>
+                  <span className="text-zinc-300">{batchProgress.leads.enrichment_queue}</span> Leads in Enrichment-Queue (Phase A)
+                </span>
+              )}
+              {(batchProgress.leads.pass_email_queue ?? 0) > 0 && (
+                <span>
+                  <span className="text-zinc-300">{batchProgress.leads.pass_email_queue}</span> in Pass+Email-Queue (Phase B)
+                </span>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

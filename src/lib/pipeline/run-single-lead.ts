@@ -1,15 +1,20 @@
 /**
- * Run the COMPLETE pipeline on a single lead.
+ * Pipeline für einen einzelnen Lead — gesplittet in 2 Phasen (Block 3).
  *
- * Extracted from /api/leads/[id]/run-pipeline so that both
- * the single-lead endpoint AND the batch runner can use the same logic.
+ * Phase A — Enrichment (runEnrichmentForLead):
+ *   1. Scrape website (logo, colors, impressum, social)
+ *   2. AI Classification (industry, reward, hooks)
+ *   → Setzt enrichment_status='completed'
+ *   → Gated durch triage_status='approved'
  *
- * Steps:
- * 1. Scrape website via /api/tools/scrape
- * 2. AI Classification (industry, reward, hooks)
- * 3. Generate Download Page Slug
- * 4. Generate Pass (Apple + Google)
- * 5. A/B-Group zuweisen (counter-balanced) + 1 Email generieren
+ * Phase B — Pass+Email (runPassEmailForLead):
+ *   3. Generate Download Page Slug
+ *   4. Generate Pass (Apple + Google)
+ *   5. A/B-Group zuweisen + 1 Email generieren
+ *   → Setzt pass_status='ready', email_status='review'
+ *   → Gated durch enrichment_review_status='approved'
+ *
+ * runPipelineForLead läuft beide Phasen nacheinander (Legacy / Single-Lead-Button).
  */
 
 import { generatePassesForLead } from '@/lib/wallet/pass-data'
@@ -28,17 +33,17 @@ export type PipelineResult = {
   error?: string
 }
 
-export async function runPipelineForLead(
+/**
+ * Phase A — Enrichment: Scrape + AI-Klassifikation.
+ * Läuft nur auf Leads mit triage_status='approved'.
+ */
+export async function runEnrichmentForLead(
   leadId: string,
   supabase: SupabaseClient,
   baseUrl: string,
 ): Promise<PipelineResult> {
   const startTime = Date.now()
   const steps: Record<string, unknown> = {}
-  const downloadBaseUrl = process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || baseUrl
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let scrapeData: any = null
 
   const { data: lead, error: fetchErr } = await supabase
     .from('leads').select('*').eq('id', leadId).single()
@@ -49,6 +54,12 @@ export async function runPipelineForLead(
   if (!lead.website_url) {
     return { success: false, durationMs: Date.now() - startTime, steps, error: 'Lead hat keine Website-URL' }
   }
+  if (lead.triage_status !== 'approved') {
+    return { success: false, durationMs: Date.now() - startTime, steps, error: `Lead nicht triage-approved (status: ${lead.triage_status})` }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let scrapeData: any = null
 
   try {
     // ═══ STEP 1: Scrape via /api/tools/scrape ═══════════════════
@@ -63,7 +74,7 @@ export async function runPipelineForLead(
       force: true,
     }
 
-    console.log(`[Pipeline] Calling scraper: ${baseUrl}/api/tools/scrape`)
+    console.log(`[Enrich] Calling scraper: ${baseUrl}/api/tools/scrape`)
     const scrapeRes = await fetch(`${baseUrl}/api/tools/scrape`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -71,88 +82,79 @@ export async function runPipelineForLead(
     })
 
     scrapeData = await scrapeRes.json()
-    console.log(`[Pipeline] Scrape response: ok=${scrapeRes.ok}, hasEP=${!!scrapeData.enrichmentPreview}, hasLogo=${!!scrapeData.enrichmentPreview?.logo}, passPreview=${JSON.stringify(scrapeData.enrichmentPreview?.passPreview)}`)
 
     if (!scrapeRes.ok) {
       steps.scrape = { success: false, error: scrapeData.error || 'Scrape failed' }
-    } else {
-      const ep = scrapeData.enrichmentPreview
-      const impressum = scrapeData.impressum
+      await supabase.from('leads').update({ enrichment_status: 'failed' }).eq('id', leadId)
+      return { success: false, durationMs: Date.now() - startTime, steps, error: scrapeData.error || 'Scrape failed' }
+    }
 
-      if (!ep) {
-        console.log(`[Pipeline] WARNING: No enrichmentPreview in scrape response!`)
-      }
+    const ep = scrapeData.enrichmentPreview
+    const impressum = scrapeData.impressum
 
-      // Update lead with enrichment data
-      const updateData: Record<string, unknown> = {
-        enrichment_status: 'completed',
-        website_description: scrapeData.description || lead.website_description,
-        social_links: scrapeData.socialLinks || lead.social_links,
-        has_existing_loyalty: scrapeData.loyaltyDetected || lead.has_existing_loyalty,
-        has_app: scrapeData.appDetected || lead.has_app,
-      }
+    const updateData: Record<string, unknown> = {
+      enrichment_status: 'completed',
+      website_description: scrapeData.description || lead.website_description,
+      social_links: scrapeData.socialLinks || lead.social_links,
+      has_existing_loyalty: scrapeData.loyaltyDetected || lead.has_existing_loyalty,
+      has_app: scrapeData.appDetected || lead.has_app,
+    }
 
-      if (ep?.logo?.base64) {
-        try {
-          const logoBuffer = Buffer.from(ep.logo.base64, 'base64')
-          const logoPath = `lead-logos/${leadId}.png`
-          const { error: upErr } = await supabase.storage.from('scrape-cache').upload(logoPath, logoBuffer, {
-            contentType: 'image/png', upsert: true,
-          })
-          if (upErr) {
-            console.log(`[Pipeline] Logo upload failed: ${upErr.message}`)
-            updateData.logo_url = scrapeData.bestLogo?.url || lead.logo_url
-          } else {
-            const { data: logoUrlData } = supabase.storage.from('scrape-cache').getPublicUrl(logoPath)
-            updateData.logo_url = logoUrlData.publicUrl
-            console.log(`[Pipeline] Logo uploaded: ${logoUrlData.publicUrl}`)
-          }
-          const srcMap: Record<string, string> = { 'apple-touch-icon': 'website', 'header-logo': 'website', 'favicon': 'website', 'link-icon': 'website', 'og-image': 'website', 'footer-logo': 'website', 'inline-svg': 'website', 'ai-picked': 'website' }
-          updateData.logo_source = srcMap[ep.logo.source] || ((['website','instagram','google','generated'].includes(ep.logo.source)) ? ep.logo.source : 'website')
-        } catch (err) {
-          console.log(`[Pipeline] Logo upload error: ${err instanceof Error ? err.message : err}`)
+    if (ep?.logo?.base64) {
+      try {
+        const logoBuffer = Buffer.from(ep.logo.base64, 'base64')
+        const logoPath = `lead-logos/${leadId}.png`
+        const { error: upErr } = await supabase.storage.from('scrape-cache').upload(logoPath, logoBuffer, {
+          contentType: 'image/png', upsert: true,
+        })
+        if (upErr) {
           updateData.logo_url = scrapeData.bestLogo?.url || lead.logo_url
-          const srcMap: Record<string, string> = { 'apple-touch-icon': 'website', 'header-logo': 'website', 'favicon': 'website', 'link-icon': 'website', 'og-image': 'website', 'footer-logo': 'website', 'inline-svg': 'website', 'ai-picked': 'website' }
-          updateData.logo_source = srcMap[ep.logo.source] || ((['website','instagram','google','generated'].includes(ep.logo.source)) ? ep.logo.source : 'website') || lead.logo_source
+        } else {
+          const { data: logoUrlData } = supabase.storage.from('scrape-cache').getPublicUrl(logoPath)
+          updateData.logo_url = logoUrlData.publicUrl
         }
-      } else {
-        console.log(`[Pipeline] No logo base64 in enrichment preview`)
+        const srcMap: Record<string, string> = { 'apple-touch-icon': 'website', 'header-logo': 'website', 'favicon': 'website', 'link-icon': 'website', 'og-image': 'website', 'footer-logo': 'website', 'inline-svg': 'website', 'ai-picked': 'website' }
+        updateData.logo_source = srcMap[ep.logo.source] || ((['website','instagram','google','generated'].includes(ep.logo.source)) ? ep.logo.source : 'website')
+      } catch (err) {
+        updateData.logo_url = scrapeData.bestLogo?.url || lead.logo_url
+        const srcMap: Record<string, string> = { 'apple-touch-icon': 'website', 'header-logo': 'website', 'favicon': 'website', 'link-icon': 'website', 'og-image': 'website', 'footer-logo': 'website', 'inline-svg': 'website', 'ai-picked': 'website' }
+        updateData.logo_source = srcMap[ep.logo.source] || ((['website','instagram','google','generated'].includes(ep.logo.source)) ? ep.logo.source : 'website') || lead.logo_source
+        console.log(`[Enrich] Logo upload error: ${err instanceof Error ? err.message : err}`)
       }
-      if (ep?.passPreview) {
-        updateData.dominant_color = ep.passPreview.bg
-        updateData.text_color = ep.passPreview.text
-        updateData.label_color = ep.passPreview.label
-        updateData.accent_color = ep.passPreview.label
-      }
-      if (impressum?.contactName && !lead.contact_name) {
-        updateData.contact_name = impressum.contactName
-      }
+    }
 
-      const existingExtra = (lead.extra_data || {}) as Record<string, unknown>
-      updateData.extra_data = {
-        ...existingExtra,
-        contact_first_name: impressum?.firstName || existingExtra.contact_first_name,
-        contact_last_name: impressum?.lastName || existingExtra.contact_last_name,
-        founding_year: impressum?.foundingYear || scrapeData.impressum?.foundingYear || existingExtra.founding_year,
-        website_headlines: scrapeData.websiteHeadlines || existingExtra.website_headlines,
-        website_about: scrapeData.websiteAbout || existingExtra.website_about,
-      }
+    if (ep?.passPreview) {
+      updateData.dominant_color = ep.passPreview.bg
+      updateData.text_color = ep.passPreview.text
+      updateData.label_color = ep.passPreview.label
+      updateData.accent_color = ep.passPreview.label
+    }
+    if (impressum?.contactName && !lead.contact_name) {
+      updateData.contact_name = impressum.contactName
+    }
 
-      console.log(`[Pipeline] Updating lead with: logo_url=${updateData.logo_url ? 'set' : 'null'}, dominant_color=${updateData.dominant_color}, label_color=${updateData.label_color}, accent_color=${updateData.accent_color}, contact_name=${updateData.contact_name}`)
-      const { error: updateErr } = await supabase.from('leads').update(updateData).eq('id', leadId)
-      if (updateErr) console.log(`[Pipeline] Lead update FAILED: ${updateErr.message}`)
-      else console.log(`[Pipeline] Lead updated successfully`)
+    const existingExtra = (lead.extra_data || {}) as Record<string, unknown>
+    updateData.extra_data = {
+      ...existingExtra,
+      contact_first_name: impressum?.firstName || existingExtra.contact_first_name,
+      contact_last_name: impressum?.lastName || existingExtra.contact_last_name,
+      founding_year: impressum?.foundingYear || scrapeData.impressum?.foundingYear || existingExtra.founding_year,
+      website_headlines: scrapeData.websiteHeadlines || existingExtra.website_headlines,
+      website_about: scrapeData.websiteAbout || existingExtra.website_about,
+    }
 
-      steps.scrape = {
-        success: true,
-        durationMs: Date.now() - scrapeStart,
-        title: scrapeData.title,
-        logo: ep?.logo ? `${ep.logo.source}` : 'none',
-        colors: ep?.passPreview ? { bg: ep.passPreview.bg, label: ep.passPreview.label } : null,
-        contactName: impressum?.contactName || lead.contact_name,
-        foundingYear: impressum?.foundingYear,
-        cached: scrapeData._cache?.hit || false,
-      }
+    const { error: updateErr } = await supabase.from('leads').update(updateData).eq('id', leadId)
+    if (updateErr) console.log(`[Enrich] Lead update FAILED: ${updateErr.message}`)
+
+    steps.scrape = {
+      success: true,
+      durationMs: Date.now() - scrapeStart,
+      title: scrapeData.title,
+      logo: ep?.logo ? `${ep.logo.source}` : 'none',
+      colors: ep?.passPreview ? { bg: ep.passPreview.bg, label: ep.passPreview.label } : null,
+      contactName: impressum?.contactName || lead.contact_name,
+      foundingYear: impressum?.foundingYear,
+      cached: scrapeData._cache?.hit || false,
     }
 
     // ═══ STEP 2: AI Classification ════════════════════════════════
@@ -184,7 +186,6 @@ export async function runPipelineForLead(
             personalization_notes: classification.personalization_notes,
           }).eq('id', leadId)
 
-          industrySlug = classification.detected_industry
           steps.classify = {
             success: true,
             durationMs: Date.now() - classifyStart,
@@ -218,10 +219,46 @@ export async function runPipelineForLead(
       steps.classify = { success: false, error: err instanceof Error ? err.message : 'Failed' }
     }
 
+    return { success: true, durationMs: Date.now() - startTime, steps }
+  } catch (err) {
+    await supabase.from('leads').update({ enrichment_status: 'failed' }).eq('id', leadId)
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Enrichment fehlgeschlagen',
+      durationMs: Date.now() - startTime,
+      steps,
+    }
+  }
+}
+
+/**
+ * Phase B — Pass + Email: Slug + Pass-Generation + A/B-Group + Email.
+ * Läuft nur auf Leads mit enrichment_review_status='approved'.
+ */
+export async function runPassEmailForLead(
+  leadId: string,
+  supabase: SupabaseClient,
+  baseUrl: string,
+): Promise<PipelineResult> {
+  const startTime = Date.now()
+  const steps: Record<string, unknown> = {}
+  const downloadBaseUrl = process.env.NEXT_PUBLIC_DOWNLOAD_BASE_URL || baseUrl
+
+  const { data: lead, error: fetchErr } = await supabase
+    .from('leads').select('*').eq('id', leadId).single()
+
+  if (fetchErr || !lead) {
+    return { success: false, durationMs: Date.now() - startTime, steps, error: 'Lead nicht gefunden' }
+  }
+  if (lead.enrichment_review_status !== 'approved') {
+    return { success: false, durationMs: Date.now() - startTime, steps, error: `Lead nicht enrichment-approved (status: ${lead.enrichment_review_status})` }
+  }
+
+  try {
     // ═══ STEP 3: Generate Download Page Slug ══════════════════════
     if (!lead.download_page_slug) {
       const slugBase = lead.business_name
-        .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
         .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 60)
       const slug = `${slugBase}-${leadId.substring(0, 6)}`
       await supabase.from('leads').update({ download_page_slug: slug }).eq('id', leadId)
@@ -266,20 +303,14 @@ export async function runPipelineForLead(
         const downloadUrl = fl.download_page_slug ? `${downloadBaseUrl}/d/${fl.download_page_slug}` : downloadBaseUrl
         const extra = (fl.extra_data || {}) as Record<string, unknown>
 
-        // A/B-Group zuweisen (counter-balanced pro Campaign), nur falls noch nicht gesetzt
         let abGroup = fl.ab_group
-        let abAssignmentLog: string | null = null
         if (!abGroup && fl.campaign_id) {
           const assignment = await assignABGroup(fl.campaign_id, supabase)
           abGroup = assignment.strategy
-          abAssignmentLog = `[Pipeline] Assigned ab_group: ${abGroup} for lead ${leadId} (campaign counts: ${JSON.stringify(assignment.counts)})`
-          console.log(abAssignmentLog)
+          console.log(`[PassEmail] Assigned ab_group: ${abGroup} for lead ${leadId} (counts: ${JSON.stringify(assignment.counts)})`)
           await supabase.from('leads').update({ ab_group: abGroup }).eq('id', leadId)
-        } else if (abGroup) {
-          console.log(`[Pipeline] Re-using existing ab_group: ${abGroup} for lead ${leadId}`)
         }
 
-        // Fallback falls Lead keine campaign_id hat (sollte nicht vorkommen)
         const strategy = abGroup || 'curiosity'
 
         const emailInput = {
@@ -307,8 +338,6 @@ export async function runPipelineForLead(
 
         const result = await writeEmail(emailInput)
 
-        // Bestehende Variants beibehalten (Rückwärtskompatibilität bei Pipeline-Re-Runs),
-        // neue ab_group-Variante hinzufügen.
         const existingVariants = (fl.email_variants || {}) as Record<string, { subject: string; body: string }>
         const variants = {
           ...existingVariants,
@@ -335,17 +364,57 @@ export async function runPipelineForLead(
       steps.emails = { success: false, error: err instanceof Error ? err.message : 'Failed' }
     }
 
-    return {
-      success: true,
-      durationMs: Date.now() - startTime,
-      steps,
-    }
+    return { success: true, durationMs: Date.now() - startTime, steps }
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Pipeline fehlgeschlagen',
+      error: err instanceof Error ? err.message : 'Pass/Email fehlgeschlagen',
       durationMs: Date.now() - startTime,
       steps,
     }
   }
+}
+
+/**
+ * Legacy / Single-Lead-Button: läuft beide Phasen nacheinander.
+ * Überspringt Gates (setzt sie temporär auf 'approved', falls nötig), damit der
+ * existierende "Run Full Pipeline"-Button pro Lead weiter funktioniert.
+ */
+export async function runPipelineForLead(
+  leadId: string,
+  supabase: SupabaseClient,
+  baseUrl: string,
+): Promise<PipelineResult> {
+  const startTime = Date.now()
+  const allSteps: Record<string, unknown> = {}
+
+  // Force-approve für manuellen Single-Lead-Run (Dashboard-Button).
+  await supabase.from('leads').update({
+    triage_status: 'approved',
+    enrichment_review_status: 'approved',
+  }).eq('id', leadId)
+
+  const enrich = await runEnrichmentForLead(leadId, supabase, baseUrl)
+  allSteps.enrichment = enrich.steps
+  if (!enrich.success) {
+    return {
+      success: false,
+      error: enrich.error,
+      durationMs: Date.now() - startTime,
+      steps: allSteps,
+    }
+  }
+
+  const pe = await runPassEmailForLead(leadId, supabase, baseUrl)
+  allSteps.passEmail = pe.steps
+  if (!pe.success) {
+    return {
+      success: false,
+      error: pe.error,
+      durationMs: Date.now() - startTime,
+      steps: allSteps,
+    }
+  }
+
+  return { success: true, durationMs: Date.now() - startTime, steps: allSteps }
 }

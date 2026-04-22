@@ -592,6 +592,9 @@ export type Lead = {
   // A/B-Test (Block 1)
   ab_group: EmailStrategy | null
   ab_group_override: boolean
+  // Swipe-Gates (Block 3)
+  triage_status: TriageStatus
+  enrichment_review_status: EnrichmentReviewStatus
   // Follow-up-Content vorgeneriert (Block 1)
   email_followup1_subject: string | null
   email_followup1_body: string | null
@@ -661,6 +664,8 @@ export type EmailVerifyResult = 'valid' | 'invalid' | 'risky' | 'unknown'
 // ============================================
 
 export type EnrichmentStatus = 'pending' | 'processing' | 'completed' | 'failed'
+export type TriageStatus = 'pending' | 'approved' | 'rejected' | 'skipped'
+export type EnrichmentReviewStatus = 'pending' | 'approved' | 'rejected' | 'skipped' | 'reenrich'
 export type PassStatus = 'pending' | 'generating' | 'ready' | 'failed'
 export type EmailStatus = 'pending' | 'review' | 'queued' | 'sent' | 'opened' | 'clicked' | 'replied' | 'bounced'
 export type PipelineStatus = 'new' | 'contacted' | 'engaged' | 'interested' | 'demo_scheduled' | 'converted' | 'warm' | 'lost' | 'blacklisted'

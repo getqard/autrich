@@ -138,6 +138,7 @@ export async function POST(
     contact_name: string | null
     instagram_handle: string | null
     download_page_slug: string
+    triage_status: 'approved'
   }> = []
 
   const validationErrors: Array<{ row: number; email: string; message: string }> = []
@@ -221,6 +222,7 @@ export async function POST(
       contact_name: row.contact_name || null,
       instagram_handle: row.instagram_handle || null,
       download_page_slug: slug,
+      triage_status: 'approved' as const, // CSV-Uploads überspringen Stage-1-Triage
     })
   }
 

@@ -224,6 +224,9 @@ export async function POST(
           enrichment_status: 'pending',
           pass_status: 'pending',
           email_status: 'pending',
+          source: 'scraping',
+          triage_status: 'pending',
+          enrichment_review_status: 'pending',
         }
 
         if (!lead.email) { skipped++; continue }

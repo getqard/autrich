@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { runPipelineForLead } from '@/lib/pipeline/run-single-lead'
+import { runEnrichmentForLead, runPassEmailForLead } from '@/lib/pipeline/run-single-lead'
 
 export const maxDuration = 300 // 5 minutes (Vercel Fluid Compute)
 
@@ -10,14 +10,15 @@ type BatchProgress = {
   completed: number
   failed: number
   current_lead_name?: string
+  current_phase?: 'enrichment' | 'pass_email'
   started_at?: string
   completed_at?: string
-  failed_leads?: Array<{ id: string; name: string; error: string }>
+  failed_leads?: Array<{ id: string; name: string; error: string; phase: string }>
 }
 
 /**
  * GET /api/campaigns/[id]/batch-pipeline
- * Returns current batch progress.
+ * Returns current batch progress + counts pro Phase.
  */
 export async function GET(
   _request: NextRequest,
@@ -36,30 +37,41 @@ export async function GET(
   const settings = (campaign.settings || {}) as Record<string, unknown>
   const progress = (settings.batch_progress || { status: 'idle', total: 0, completed: 0, failed: 0 }) as BatchProgress
 
-  // Also return counts of leads in different states
-  const { count: pendingCount } = await supabase
-    .from('leads')
-    .select('id', { count: 'exact', head: true })
-    .eq('campaign_id', id)
-    .or('enrichment_status.eq.pending,pass_status.eq.pending,email_status.eq.pending')
-
-  const { count: readyCount } = await supabase
-    .from('leads')
-    .select('id', { count: 'exact', head: true })
-    .eq('campaign_id', id)
-    .eq('email_status', 'review')
-
-  const { count: totalCount } = await supabase
-    .from('leads')
-    .select('id', { count: 'exact', head: true })
-    .eq('campaign_id', id)
+  // Counts pro Stage (für Progress-UI in Campaign-Page)
+  const [
+    { count: awaitingTriage },
+    { count: enrichmentQueue },
+    { count: awaitingEnrichmentReview },
+    { count: passEmailQueue },
+    { count: readyForReview },
+    { count: totalCount },
+  ] = await Promise.all([
+    supabase.from('leads').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', id).eq('triage_status', 'pending'),
+    supabase.from('leads').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', id).eq('triage_status', 'approved').eq('enrichment_status', 'pending')
+      .not('website_url', 'is', null),
+    supabase.from('leads').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', id).eq('enrichment_status', 'completed').eq('enrichment_review_status', 'pending'),
+    supabase.from('leads').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', id).eq('enrichment_review_status', 'approved').eq('pass_status', 'pending'),
+    supabase.from('leads').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', id).eq('email_status', 'review'),
+    supabase.from('leads').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', id),
+  ])
 
   return NextResponse.json({
     ...progress,
     leads: {
       total: totalCount || 0,
-      pending: pendingCount || 0,
-      ready_for_review: readyCount || 0,
+      awaiting_triage: awaitingTriage || 0,
+      enrichment_queue: enrichmentQueue || 0,
+      awaiting_enrichment_review: awaitingEnrichmentReview || 0,
+      pass_email_queue: passEmailQueue || 0,
+      ready_for_review: readyForReview || 0,
+      // Legacy-Feld für bestehende UI-Kompatibilität
+      pending: (enrichmentQueue || 0) + (passEmailQueue || 0),
     },
   })
 }
@@ -67,8 +79,10 @@ export async function GET(
 /**
  * POST /api/campaigns/[id]/batch-pipeline
  *
- * Processes the next chunk of leads (max 10 per invocation).
- * Client polls GET and re-triggers POST until all leads are done.
+ * Verarbeitet den nächsten Chunk von Leads (max 10 pro Aufruf).
+ * Pickt in Reihenfolge:
+ *   1. Phase A: Enrichment (triage_status='approved' AND enrichment_status='pending')
+ *   2. Phase B: Pass+Email (enrichment_review_status='approved' AND pass_status='pending')
  *
  * Body: { action?: 'start' | 'continue' | 'stop' }
  */
@@ -81,12 +95,10 @@ export async function POST(
   const body = await request.json().catch(() => ({}))
   const action = (body as { action?: string }).action || 'continue'
 
-  // Determine base URL
   const baseUrl = request.headers.get('host')
     ? `${request.headers.get('x-forwarded-proto') || 'https'}://${request.headers.get('host')}`
     : process.env.NEXT_PUBLIC_BASE_URL || 'https://autrich.vercel.app'
 
-  // Load campaign
   const { data: campaign, error: campErr } = await supabase
     .from('campaigns').select('*').eq('id', id).single()
 
@@ -99,137 +111,158 @@ export async function POST(
     status: 'idle', total: 0, completed: 0, failed: 0, failed_leads: [],
   }) as BatchProgress
 
-  // Handle stop action
   if (action === 'stop') {
     progress.status = 'idle'
     await updateProgress(supabase, id, settings, progress)
     return NextResponse.json({ ...progress, message: 'Batch gestoppt' })
   }
 
-  // Prevent double-trigger
   if (progress.status === 'running') {
-    // Check if it's been running for too long (stuck, > 6 min)
     const startedAt = progress.started_at ? new Date(progress.started_at).getTime() : 0
     if (Date.now() - startedAt < 360000) {
       return NextResponse.json({ error: 'Batch läuft bereits' }, { status: 409 })
     }
-    // Stuck — reset and continue
     console.log(`[Batch] Previous run appears stuck (${Date.now() - startedAt}ms), resetting`)
   }
 
-  // Find leads that need processing
-  // A lead needs processing if it hasn't gone through the full pipeline yet
-  const { data: pendingLeads, error: leadsErr } = await supabase
+  // ───── Phase A: Enrichment-Queue ─────
+  const { data: enrichLeads, error: enrichErr } = await supabase
     .from('leads')
     .select('id, business_name, website_url')
     .eq('campaign_id', id)
+    .eq('triage_status', 'approved')
+    .eq('enrichment_status', 'pending')
     .not('website_url', 'is', null)
-    .or('enrichment_status.eq.pending,pass_status.eq.pending,email_status.eq.pending')
-    .order('created_at', { ascending: true })
-    .limit(10)  // Max 10 per chunk (~20s each = ~200s, under 300s limit)
+    .order('lead_score', { ascending: false })
+    .limit(10)
 
-  if (leadsErr) {
-    return NextResponse.json({ error: `Leads laden fehlgeschlagen: ${leadsErr.message}` }, { status: 500 })
+  if (enrichErr) {
+    return NextResponse.json({ error: `Leads laden fehlgeschlagen: ${enrichErr.message}` }, { status: 500 })
   }
 
-  if (!pendingLeads || pendingLeads.length === 0) {
-    // All done
-    progress.status = 'completed'
-    progress.completed_at = new Date().toISOString()
-    await updateProgress(supabase, id, settings, progress)
-
-    // Update campaign status
-    await supabase.from('campaigns').update({ status: 'ready' }).eq('id', id)
-
-    return NextResponse.json({ ...progress, message: 'Alle Leads verarbeitet' })
-  }
-
-  // Count total pending (for progress tracking)
+  // Totals über beide Phasen
   if (action === 'start' || progress.status === 'idle' || progress.status === 'completed') {
-    const { count: totalPending } = await supabase
-      .from('leads')
-      .select('id', { count: 'exact', head: true })
-      .eq('campaign_id', id)
-      .not('website_url', 'is', null)
-      .or('enrichment_status.eq.pending,pass_status.eq.pending,email_status.eq.pending')
+    const [{ count: enrichPending }, { count: passEmailPending }] = await Promise.all([
+      supabase.from('leads').select('id', { count: 'exact', head: true })
+        .eq('campaign_id', id).eq('triage_status', 'approved').eq('enrichment_status', 'pending')
+        .not('website_url', 'is', null),
+      supabase.from('leads').select('id', { count: 'exact', head: true })
+        .eq('campaign_id', id).eq('enrichment_review_status', 'approved').eq('pass_status', 'pending'),
+    ])
+    const totalPending = (enrichPending || 0) + (passEmailPending || 0)
 
-    progress.total = (totalPending || 0) + progress.completed
+    progress.total = totalPending + progress.completed
     progress.completed = progress.status === 'completed' ? 0 : progress.completed
     progress.failed = progress.status === 'completed' ? 0 : progress.failed
     progress.failed_leads = progress.status === 'completed' ? [] : (progress.failed_leads || [])
     progress.started_at = new Date().toISOString()
   }
 
-  // Mark as running
   progress.status = 'running'
   await updateProgress(supabase, id, settings, progress)
-
-  // Update campaign status
   await supabase.from('campaigns').update({ status: 'processing' }).eq('id', id)
 
-  // Process leads one by one
   let chunkCompleted = 0
   let chunkFailed = 0
 
-  for (const lead of pendingLeads) {
-    // Check if stopped (re-read progress)
-    if (chunkCompleted > 0 && chunkCompleted % 3 === 0) {
-      const { data: freshCampaign } = await supabase
-        .from('campaigns').select('settings').eq('id', id).single()
-      const freshSettings = (freshCampaign?.settings || {}) as Record<string, unknown>
-      const freshProgress = freshSettings.batch_progress as BatchProgress | undefined
-      if (freshProgress?.status === 'idle') {
+  // Phase A verarbeiten, falls Leads da sind
+  if (enrichLeads && enrichLeads.length > 0) {
+    progress.current_phase = 'enrichment'
+    for (const lead of enrichLeads) {
+      if (chunkCompleted > 0 && chunkCompleted % 3 === 0 && await stopRequested(supabase, id)) {
         console.log(`[Batch] Stop requested, halting after ${chunkCompleted} leads`)
         break
       }
-    }
 
-    progress.current_lead_name = lead.business_name
-    await updateProgress(supabase, id, settings, progress)
+      progress.current_lead_name = lead.business_name
+      await updateProgress(supabase, id, settings, progress)
+      console.log(`[Batch/Enrich] ${progress.completed + 1}/${progress.total}: ${lead.business_name}`)
 
-    console.log(`[Batch] Processing lead ${progress.completed + 1}/${progress.total}: ${lead.business_name}`)
-
-    try {
-      const result = await runPipelineForLead(lead.id, supabase, baseUrl)
-
-      if (result.success) {
-        progress.completed++
-        chunkCompleted++
-        console.log(`[Batch] ✓ ${lead.business_name} (${result.durationMs}ms)`)
-      } else {
+      try {
+        const result = await runEnrichmentForLead(lead.id, supabase, baseUrl)
+        if (result.success) {
+          progress.completed++
+          chunkCompleted++
+        } else {
+          progress.failed++
+          chunkFailed++
+          progress.failed_leads = progress.failed_leads || []
+          progress.failed_leads.push({ id: lead.id, name: lead.business_name, error: result.error || 'Unknown', phase: 'enrichment' })
+        }
+      } catch (err) {
         progress.failed++
         chunkFailed++
         progress.failed_leads = progress.failed_leads || []
-        progress.failed_leads.push({ id: lead.id, name: lead.business_name, error: result.error || 'Unknown' })
-        console.log(`[Batch] ✗ ${lead.business_name}: ${result.error}`)
+        progress.failed_leads.push({ id: lead.id, name: lead.business_name, error: err instanceof Error ? err.message : 'Exception', phase: 'enrichment' })
       }
-    } catch (err) {
-      progress.failed++
-      chunkFailed++
-      progress.failed_leads = progress.failed_leads || []
-      progress.failed_leads.push({ id: lead.id, name: lead.business_name, error: err instanceof Error ? err.message : 'Exception' })
-      console.log(`[Batch] ✗ ${lead.business_name}: ${err instanceof Error ? err.message : err}`)
+      await updateProgress(supabase, id, settings, progress)
+    }
+  } else {
+    // Phase A leer → Phase B probieren
+    const { data: passEmailLeads, error: peErr } = await supabase
+      .from('leads')
+      .select('id, business_name')
+      .eq('campaign_id', id)
+      .eq('enrichment_review_status', 'approved')
+      .eq('pass_status', 'pending')
+      .order('lead_score', { ascending: false })
+      .limit(10)
+
+    if (peErr) {
+      return NextResponse.json({ error: `Leads laden fehlgeschlagen: ${peErr.message}` }, { status: 500 })
     }
 
-    // Update progress after each lead
-    await updateProgress(supabase, id, settings, progress)
+    if (passEmailLeads && passEmailLeads.length > 0) {
+      progress.current_phase = 'pass_email'
+      for (const lead of passEmailLeads) {
+        if (chunkCompleted > 0 && chunkCompleted % 3 === 0 && await stopRequested(supabase, id)) {
+          console.log(`[Batch] Stop requested, halting after ${chunkCompleted} leads`)
+          break
+        }
+
+        progress.current_lead_name = lead.business_name
+        await updateProgress(supabase, id, settings, progress)
+        console.log(`[Batch/PassEmail] ${progress.completed + 1}/${progress.total}: ${lead.business_name}`)
+
+        try {
+          const result = await runPassEmailForLead(lead.id, supabase, baseUrl)
+          if (result.success) {
+            progress.completed++
+            chunkCompleted++
+          } else {
+            progress.failed++
+            chunkFailed++
+            progress.failed_leads = progress.failed_leads || []
+            progress.failed_leads.push({ id: lead.id, name: lead.business_name, error: result.error || 'Unknown', phase: 'pass_email' })
+          }
+        } catch (err) {
+          progress.failed++
+          chunkFailed++
+          progress.failed_leads = progress.failed_leads || []
+          progress.failed_leads.push({ id: lead.id, name: lead.business_name, error: err instanceof Error ? err.message : 'Exception', phase: 'pass_email' })
+        }
+        await updateProgress(supabase, id, settings, progress)
+      }
+    }
   }
 
-  // Check if there are more leads to process
-  const { count: remainingCount } = await supabase
-    .from('leads')
-    .select('id', { count: 'exact', head: true })
-    .eq('campaign_id', id)
-    .not('website_url', 'is', null)
-    .or('enrichment_status.eq.pending,pass_status.eq.pending,email_status.eq.pending')
+  // Remaining über beide Phasen prüfen
+  const [{ count: enrichRem }, { count: peRem }] = await Promise.all([
+    supabase.from('leads').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', id).eq('triage_status', 'approved').eq('enrichment_status', 'pending')
+      .not('website_url', 'is', null),
+    supabase.from('leads').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', id).eq('enrichment_review_status', 'approved').eq('pass_status', 'pending'),
+  ])
+  const remaining = (enrichRem || 0) + (peRem || 0)
 
-  if (!remainingCount || remainingCount === 0) {
+  if (remaining === 0) {
     progress.status = 'completed'
     progress.completed_at = new Date().toISOString()
     progress.current_lead_name = undefined
+    progress.current_phase = undefined
     await supabase.from('campaigns').update({ status: 'ready' }).eq('id', id)
   } else {
-    // More leads remaining — stay 'running' so client triggers next chunk
     progress.status = 'running'
   }
 
@@ -238,8 +271,19 @@ export async function POST(
   return NextResponse.json({
     ...progress,
     chunk: { processed: chunkCompleted + chunkFailed, succeeded: chunkCompleted, failed: chunkFailed },
-    remaining: remainingCount || 0,
+    remaining,
   })
+}
+
+async function stopRequested(
+  supabase: ReturnType<typeof createServiceClient>,
+  campaignId: string,
+): Promise<boolean> {
+  const { data: freshCampaign } = await supabase
+    .from('campaigns').select('settings').eq('id', campaignId).single()
+  const freshSettings = (freshCampaign?.settings || {}) as Record<string, unknown>
+  const freshProgress = freshSettings.batch_progress as BatchProgress | undefined
+  return freshProgress?.status === 'idle'
 }
 
 async function updateProgress(

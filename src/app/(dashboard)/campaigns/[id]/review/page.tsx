@@ -6,6 +6,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Loader2, Check, X, SkipForward,
   Palette, ChevronDown, ChevronUp, Sparkles,
+  Pencil, RefreshCw, Image as ImageIcon,
 } from 'lucide-react'
 
 type ReviewLead = {
@@ -38,6 +39,7 @@ type ReviewLead = {
   lead_score: number
   download_page_slug: string | null
   pass_serial: string | null
+  mockup_png_url: string | null
 }
 
 const STRATEGIES = ['curiosity', 'social_proof', 'direct', 'storytelling', 'provocation'] as const
@@ -65,6 +67,17 @@ export default function ReviewPage() {
   const [editColors, setEditColors] = useState({ bg: '', text: '', label: '' })
   const [colorSaving, setColorSaving] = useState(false)
   const [regenerating, setRegenerating] = useState<string | null>(null)
+
+  // Inline-Edit für Subject/Body (Block 3)
+  const [editingSubject, setEditingSubject] = useState(false)
+  const [editingBody, setEditingBody] = useState(false)
+  const [editSubject, setEditSubject] = useState('')
+  const [editBody, setEditBody] = useState('')
+
+  // Reward-Edit (Block 3)
+  const [editingReward, setEditingReward] = useState(false)
+  const [editReward, setEditReward] = useState('')
+  const [regeneratingPass, setRegeneratingPass] = useState(false)
 
   // Stats
   const [approved, setApproved] = useState(0)
@@ -101,6 +114,12 @@ export default function ReviewPage() {
         text: lead.text_color || '#ffffff',
         label: lead.label_color || '#999999',
       })
+      setEditingSubject(false)
+      setEditingBody(false)
+      setEditingReward(false)
+      setEditSubject(lead.email_subject || '')
+      setEditBody(lead.email_body || '')
+      setEditReward(lead.detected_reward || '')
     }
   }, [lead])
 
@@ -115,8 +134,17 @@ export default function ReviewPage() {
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (actionLoading || regenerating || !lead) return
-      // Ignore if typing in input
-      if (e.target instanceof HTMLInputElement) return
+      // Ignore wenn Nutzer gerade tippt (Input, Textarea, contentEditable)
+      // oder Inline-Edit-Modus aktiv ist
+      const target = e.target as HTMLElement | null
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable ||
+        editingSubject ||
+        editingBody ||
+        editingReward
+      ) return
 
       switch (e.key) {
         case 'Enter':
@@ -142,7 +170,7 @@ export default function ReviewPage() {
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lead, actionLoading, regenerating, selectedStrategy, currentIndex])
+  }, [lead, actionLoading, regenerating, selectedStrategy, currentIndex, editingSubject, editingBody, editingReward])
 
   async function handleApprove() {
     if (!lead || actionLoading) return
@@ -234,6 +262,71 @@ export default function ReviewPage() {
     ))
     setShowColorEdit(false)
     setColorSaving(false)
+  }
+
+  async function saveSubjectBody() {
+    if (!lead) return
+    const newSubject = editSubject
+    const newBody = editBody
+    // Aktualisiere auch email_variants[selectedStrategy] damit beim Strategie-Tabben die Edits erhalten bleiben
+    const variants = { ...(lead.email_variants || {}), [selectedStrategy]: { subject: newSubject, body: newBody } }
+    await fetch(`/api/leads/${lead.id}/inline-update`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_subject: newSubject,
+        email_body: newBody,
+        email_variants: variants,
+      }),
+    })
+    setLeads(prev => prev.map((l, i) =>
+      i === currentIndex
+        ? { ...l, email_subject: newSubject, email_body: newBody, email_variants: variants }
+        : l
+    ))
+    setEditingSubject(false)
+    setEditingBody(false)
+  }
+
+  async function regeneratePassAndEmail() {
+    if (!lead || regeneratingPass) return
+    setRegeneratingPass(true)
+    try {
+      // 1. Reward speichern
+      await fetch(`/api/leads/${lead.id}/inline-update`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ detected_reward: editReward }),
+      })
+      // 2. Pass neu generieren
+      await fetch(`/api/leads/${lead.id}/generate-pass`, { method: 'POST' })
+      // 3. Email neu generieren (selected strategy)
+      const res = await fetch(`/api/leads/${lead.id}/generate-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strategy: selectedStrategy, persist: true }),
+      })
+      if (res.ok) {
+        const result = await res.json() as { subject: string; body: string }
+        setLeads(prev => prev.map((l, i) => {
+          if (i !== currentIndex) return l
+          const variants = { ...(l.email_variants || {}), [selectedStrategy]: { subject: result.subject, body: result.body } }
+          return {
+            ...l,
+            detected_reward: editReward,
+            email_subject: result.subject,
+            email_body: result.body,
+            email_strategy: selectedStrategy,
+            email_variants: variants,
+          }
+        }))
+        setEditSubject(result.subject)
+        setEditBody(result.body)
+      }
+      setEditingReward(false)
+    } finally {
+      setRegeneratingPass(false)
+    }
   }
 
   // Get email content for selected strategy
@@ -430,6 +523,54 @@ export default function ReviewPage() {
                 </div>
               )}
 
+              {/* Reward-Edit + Regenerate (Block 3) */}
+              <div className="mt-4 pt-4 border-t border-zinc-800">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] text-zinc-500">Belohnung</p>
+                  {!editingReward && (
+                    <button
+                      onClick={() => { setEditingReward(true); setEditReward(lead.detected_reward || '') }}
+                      className="text-zinc-500 hover:text-white"
+                      title="Belohnung ändern"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                  )}
+                </div>
+                {editingReward ? (
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      value={editReward}
+                      onChange={e => setEditReward(e.target.value)}
+                      placeholder="z.B. 1 Gratis Kaffee"
+                      autoFocus
+                      className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setEditingReward(false); setEditReward(lead.detected_reward || '') }}
+                        className="px-3 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 rounded"
+                      >
+                        Abbrechen
+                      </button>
+                      <button
+                        onClick={regeneratePassAndEmail}
+                        disabled={regeneratingPass || !editReward.trim()}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-1 text-xs bg-purple-600 hover:bg-purple-500 rounded disabled:opacity-50"
+                      >
+                        {regeneratingPass ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                        Pass + Email neu generieren
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-zinc-300">
+                    {lead.detected_reward_emoji} {lead.detected_reward || <span className="text-zinc-600 italic">Keine Belohnung gesetzt</span>}
+                  </p>
+                )}
+              </div>
+
               {/* Download Page Link */}
               {lead.download_page_slug && (
                 <a
@@ -478,13 +619,86 @@ export default function ReviewPage() {
               {/* Email Content */}
               {currentEmail ? (
                 <div className="space-y-3">
+                  {/* Subject */}
                   <div className="bg-zinc-800 rounded-lg p-4">
-                    <p className="text-[10px] text-zinc-500 mb-1">Betreff:</p>
-                    <p className="text-sm font-medium">{currentEmail.subject}</p>
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[10px] text-zinc-500">Betreff:</p>
+                      {!editingSubject && (
+                        <button
+                          onClick={() => { setEditingSubject(true); setEditSubject(currentEmail.subject) }}
+                          className="text-zinc-500 hover:text-white"
+                          title="Betreff bearbeiten"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                      )}
+                    </div>
+                    {editingSubject ? (
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={editSubject}
+                          onChange={e => setEditSubject(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') saveSubjectBody()
+                            if (e.key === 'Escape') { setEditingSubject(false); setEditSubject(currentEmail.subject) }
+                          }}
+                          autoFocus
+                          className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm"
+                        />
+                        <button onClick={saveSubjectBody} className="p-1.5 bg-blue-600 hover:bg-blue-500 rounded">
+                          <Check size={12} />
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-sm font-medium">{currentEmail.subject}</p>
+                    )}
                   </div>
-                  <div className="bg-zinc-800 rounded-lg p-4 max-h-64 overflow-auto">
-                    <p className="text-[10px] text-zinc-500 mb-1">Body:</p>
-                    <p className="text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed">{currentEmail.body}</p>
+
+                  {/* Body */}
+                  <div className="bg-zinc-800 rounded-lg p-4 max-h-80 overflow-auto">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[10px] text-zinc-500">Body:</p>
+                      {!editingBody && (
+                        <button
+                          onClick={() => { setEditingBody(true); setEditBody(currentEmail.body) }}
+                          className="text-zinc-500 hover:text-white"
+                          title="Body bearbeiten"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                      )}
+                    </div>
+                    {editingBody ? (
+                      <div className="space-y-2">
+                        <textarea
+                          value={editBody}
+                          onChange={e => setEditBody(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Escape') { setEditingBody(false); setEditBody(currentEmail.body) }
+                          }}
+                          autoFocus
+                          rows={10}
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono leading-relaxed"
+                        />
+                        <div className="flex gap-2 justify-end">
+                          <button
+                            onClick={() => { setEditingBody(false); setEditBody(currentEmail.body) }}
+                            className="px-3 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 rounded"
+                          >
+                            Abbrechen
+                          </button>
+                          <button
+                            onClick={saveSubjectBody}
+                            className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 rounded"
+                          >
+                            Speichern
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed">{currentEmail.body}</p>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -520,6 +734,30 @@ export default function ReviewPage() {
             </div>
           </div>
 
+          {/* Mockup-Preview (Block 4 liefert die PNG) */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
+            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <ImageIcon size={14} /> Wallet-Mockup (Email-Anhang)
+            </h3>
+            {lead.mockup_png_url ? (
+              <img
+                src={lead.mockup_png_url}
+                alt="Mockup"
+                className="w-full max-w-sm mx-auto rounded-lg border border-zinc-700"
+              />
+            ) : (
+              <div className="border border-dashed border-zinc-700 rounded-lg p-6 text-center">
+                <ImageIcon size={32} className="mx-auto text-zinc-600 mb-2" />
+                <p className="text-xs text-zinc-500">
+                  Mockup-PNG wird in <span className="text-zinc-300 font-medium">Block 4</span> generiert
+                </p>
+                <p className="text-[10px] text-zinc-600 mt-1">
+                  Dann: Apple-Wallet-UI Screenshot mit Logo + Farben des Leads
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* Action Buttons */}
           <div className="flex items-center justify-center gap-4">
             <button
@@ -544,7 +782,8 @@ export default function ReviewPage() {
 
             <button
               onClick={handleApprove}
-              disabled={actionLoading || regenerating !== null || !currentEmail}
+              disabled={actionLoading || regenerating !== null || !currentEmail || editingSubject || editingBody || editingReward || regeneratingPass}
+              title={(editingSubject || editingBody || editingReward) ? 'Erst Edit speichern oder abbrechen' : undefined}
               className="flex items-center gap-2 px-8 py-3 bg-green-600 hover:bg-green-500 text-white rounded-xl text-sm font-semibold transition-colors disabled:opacity-50 shadow-lg shadow-green-600/20"
             >
               {actionLoading ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}
