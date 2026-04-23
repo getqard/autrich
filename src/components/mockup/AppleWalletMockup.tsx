@@ -122,34 +122,22 @@ export function buildMockupJsx(i: MockupInput): ReactElement {
             }}
           >
             <span>10:52</span>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              {/* Signal-Bars */}
+            <div style={{ display: 'flex', gap: '7px', alignItems: 'center' }}>
+              {/* Signal-Bars (4 steigend) */}
               <div style={{ display: 'flex', gap: '2px', alignItems: 'flex-end' }}>
-                {[4, 6, 8, 10].map(h => (
-                  <div key={h} style={{ width: '3px', height: `${h}px`, background: '#000', borderRadius: '1px' }} />
-                ))}
-              </div>
-              {/* WiFi — 3 konzentrische Kreisbögen simuliert über Border */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-end',
-                  gap: '1px',
-                  marginLeft: '4px',
-                }}
-              >
-                {[5, 8, 11, 14].map(h => (
+                {[4, 6, 9, 12].map(h => (
                   <div
                     key={h}
-                    style={{
-                      width: '3px',
-                      height: `${h}px`,
-                      background: '#000',
-                      borderRadius: '1px',
-                    }}
+                    style={{ width: '3.5px', height: `${h}px`, background: '#000', borderRadius: '1px' }}
                   />
                 ))}
               </div>
+              {/* WiFi — SVG-Fan (echtes Apple-Style) */}
+              <svg width="16" height="12" viewBox="0 0 16 12" style={{ display: 'flex' }}>
+                <path d="M8 1.5 C 4.5 1.5, 1.8 2.9, 0.3 4.4 L 2 6.1 C 3.1 5.0, 5.3 4.0, 8 4.0 C 10.7 4.0, 12.9 5.0, 14 6.1 L 15.7 4.4 C 14.2 2.9, 11.5 1.5, 8 1.5 Z" fill="#000" />
+                <path d="M8 5.5 C 6.1 5.5, 4.4 6.3, 3.3 7.4 L 5 9.1 C 5.6 8.5, 6.6 8.0, 8 8.0 C 9.4 8.0, 10.4 8.5, 11 9.1 L 12.7 7.4 C 11.6 6.3, 9.9 5.5, 8 5.5 Z" fill="#000" />
+                <circle cx="8" cy="10.7" r="1.3" fill="#000" />
+              </svg>
               {/* Battery */}
               <div
                 style={{
@@ -160,7 +148,6 @@ export function buildMockupJsx(i: MockupInput): ReactElement {
                   width: '26px',
                   height: '12px',
                   padding: '1px',
-                  marginLeft: '4px',
                 }}
               >
                 <div style={{ background: '#000', width: '85%', height: '100%', borderRadius: '1px' }} />
@@ -168,79 +155,12 @@ export function buildMockupJsx(i: MockupInput): ReactElement {
             </div>
           </div>
 
-          {/* Wallet-Navigation-Header (X-Button + Share) */}
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              padding: '12px 20px',
-              height: '44px',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '36px',
-                height: '36px',
-                background: 'rgba(255,255,255,0.9)',
-                borderRadius: '18px',
-                fontSize: '18px',
-                fontWeight: 500,
-                color: '#6b7280',
-              }}
-            >
-              ✕
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: '48px',
-                  height: '32px',
-                  background: 'rgba(255,255,255,0.9)',
-                  borderRadius: '16px',
-                  fontSize: '14px',
-                  color: '#6b7280',
-                }}
-              >
-                ↑
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: '48px',
-                  height: '32px',
-                  background: 'rgba(255,255,255,0.9)',
-                  borderRadius: '16px',
-                  fontSize: '16px',
-                  color: '#6b7280',
-                  letterSpacing: '1px',
-                }}
-              >
-                ⋯
-              </div>
-            </div>
-          </div>
-
-          {/* PASS-CARD */}
+          {/* PASS-CARD (direkt unter Status-Bar, ohne Wallet-Chrome) */}
           <div
             style={{
               display: 'flex',
               flexDirection: 'column',
-              margin: '4px 16px 0 16px',
+              margin: '16px 16px 0 16px',
               background: bg,
               borderRadius: '20px',
               overflow: 'hidden',
@@ -364,22 +284,23 @@ export function buildMockupJsx(i: MockupInput): ReactElement {
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
-                padding: '16px 24px 16px 24px',
+                alignItems: 'flex-start',
+                padding: '18px 24px 10px 24px',
               }}
             >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '10px', color: label, letterSpacing: '1.5px', fontWeight: 700 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxWidth: '55%' }}>
+                <span style={{ fontSize: '10px', color: label, letterSpacing: '1.8px', fontWeight: 700 }}>
                   PRÄMIE
                 </span>
-                <span style={{ fontSize: '15px', color: text, fontWeight: 500, display: 'flex', gap: '4px' }}>
-                  {rewardEmoji} {reward.slice(0, 22)}
+                <span style={{ fontSize: '16px', color: text, fontWeight: 500, display: 'flex', gap: '5px', lineHeight: 1.2 }}>
+                  {rewardEmoji} {reward.slice(0, 24)}
                 </span>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-                <span style={{ fontSize: '10px', color: label, letterSpacing: '1.5px', fontWeight: 700 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '5px' }}>
+                <span style={{ fontSize: '10px', color: label, letterSpacing: '1.8px', fontWeight: 700 }}>
                   FORTSCHRITT
                 </span>
-                <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                   {Array.from({ length: maxStamps }).map((_, idx) => (
                     <div
                       key={idx}
@@ -387,11 +308,12 @@ export function buildMockupJsx(i: MockupInput): ReactElement {
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        width: '14px',
-                        height: '14px',
-                        borderRadius: '7px',
-                        background: idx < filled ? label : 'rgba(255,255,255,0.15)',
-                        fontSize: '9px',
+                        width: '18px',
+                        height: '18px',
+                        borderRadius: '9px',
+                        background: idx < filled ? label : 'rgba(255,255,255,0.12)',
+                        border: idx < filled ? 'none' : `1px solid ${label}40`,
+                        fontSize: '11px',
                         color: idx < filled ? bg : label,
                       }}
                     >
@@ -402,25 +324,25 @@ export function buildMockupJsx(i: MockupInput): ReactElement {
               </div>
             </div>
 
-            {/* QR-Code */}
+            {/* QR-Code — zentriert im verbleibenden Raum */}
             <div
               style={{
                 display: 'flex',
                 flex: 1,
                 justifyContent: 'center',
                 alignItems: 'center',
-                padding: '4px 24px 28px 24px',
+                padding: '10px 24px 24px 24px',
               }}
             >
               <div
                 style={{
                   display: 'flex',
                   background: '#ffffff',
-                  padding: '12px',
-                  borderRadius: '8px',
+                  padding: '14px',
+                  borderRadius: '10px',
                 }}
               >
-                <img src={i.qr_data_url} width={160} height={160} alt="" />
+                <img src={i.qr_data_url} width={180} height={180} alt="" />
               </div>
             </div>
           </div>
