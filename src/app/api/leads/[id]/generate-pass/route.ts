@@ -48,6 +48,7 @@ export async function POST(
         apple_pass_url: result.applePassUrl,
         google_pass_url: result.googleSaveUrl,
         strip_image_url: result.stripPublicUrl || lead.strip_image_url,
+        mockup_png_url: null, // Cache invalidieren (Block 4)
       })
       .eq('id', id)
 

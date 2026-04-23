@@ -54,6 +54,22 @@ export async function PATCH(
     updateData.accent_color = updateData.label_color
   }
 
+  // Mockup-Cache invalidieren wenn visuelle Felder geändert wurden (Block 4)
+  const MOCKUP_INVALIDATING_FIELDS = [
+    'logo_url',
+    'dominant_color',
+    'text_color',
+    'label_color',
+    'detected_reward',
+    'detected_reward_emoji',
+    'detected_stamp_emoji',
+    'detected_max_stamps',
+    'detected_pass_title',
+  ]
+  if (MOCKUP_INVALIDATING_FIELDS.some(f => f in updateData)) {
+    updateData.mockup_png_url = null
+  }
+
   if (Object.keys(updateData).length === 0) {
     return NextResponse.json({ error: 'Kein gültiges Feld zum Updaten' }, { status: 400 })
   }

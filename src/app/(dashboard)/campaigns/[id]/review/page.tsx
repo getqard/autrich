@@ -734,29 +734,15 @@ export default function ReviewPage() {
             </div>
           </div>
 
-          {/* Mockup-Preview (Block 4 liefert die PNG) */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
-            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-              <ImageIcon size={14} /> Wallet-Mockup (Email-Anhang)
-            </h3>
-            {lead.mockup_png_url ? (
-              <img
-                src={lead.mockup_png_url}
-                alt="Mockup"
-                className="w-full max-w-sm mx-auto rounded-lg border border-zinc-700"
-              />
-            ) : (
-              <div className="border border-dashed border-zinc-700 rounded-lg p-6 text-center">
-                <ImageIcon size={32} className="mx-auto text-zinc-600 mb-2" />
-                <p className="text-xs text-zinc-500">
-                  Mockup-PNG wird in <span className="text-zinc-300 font-medium">Block 4</span> generiert
-                </p>
-                <p className="text-[10px] text-zinc-600 mt-1">
-                  Dann: Apple-Wallet-UI Screenshot mit Logo + Farben des Leads
-                </p>
-              </div>
-            )}
-          </div>
+          {/* Mockup-Preview (Block 4) */}
+          <MockupPreview
+            key={lead.id}
+            leadId={lead.id}
+            mockupUrl={lead.mockup_png_url}
+            onGenerated={(url) => {
+              setLeads(prev => prev.map((l, i) => i === currentIndex ? { ...l, mockup_png_url: url } : l))
+            }}
+          />
 
           {/* Action Buttons */}
           <div className="flex items-center justify-center gap-4">
@@ -813,6 +799,93 @@ export default function ReviewPage() {
             </div>
           )}
         </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Mockup-Preview (Block 4) — Auto-Fetch wenn URL fehlt, manueller Regenerate-Button.
+ */
+function MockupPreview({
+  leadId,
+  mockupUrl,
+  onGenerated,
+}: {
+  leadId: string
+  mockupUrl: string | null
+  onGenerated: (url: string) => void
+}) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchMockup = useCallback(async (force = false) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/leads/${leadId}/mockup${force ? '?force=1' : ''}`)
+      if (res.ok) {
+        const data = await res.json() as { url: string }
+        onGenerated(data.url)
+      } else {
+        const err = await res.json().catch(() => ({})) as { error?: string }
+        setError(err.error || `HTTP ${res.status}`)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Netzwerkfehler')
+    } finally {
+      setLoading(false)
+    }
+  }, [leadId, onGenerated])
+
+  // Auto-Fetch beim ersten Laden falls noch keine URL
+  useEffect(() => {
+    if (!mockupUrl && !loading) fetchMockup(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          <ImageIcon size={14} /> Wallet-Mockup (Email-Anhang)
+        </h3>
+        <button
+          onClick={() => fetchMockup(true)}
+          disabled={loading}
+          className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-white disabled:opacity-50"
+          title="Mockup neu generieren"
+        >
+          {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          Neu generieren
+        </button>
+      </div>
+      {loading && !mockupUrl ? (
+        <div className="flex flex-col items-center py-8 gap-3">
+          <Loader2 size={24} className="animate-spin text-zinc-500" />
+          <p className="text-xs text-zinc-500">Mockup wird erstellt (~5s)…</p>
+        </div>
+      ) : mockupUrl ? (
+        <img
+          src={mockupUrl}
+          alt="Mockup"
+          className="w-full max-w-sm mx-auto rounded-lg border border-zinc-700"
+        />
+      ) : error ? (
+        <div className="border border-red-500/30 bg-red-500/5 rounded-lg p-4 text-center">
+          <p className="text-xs text-red-400">Mockup-Fehler: {error}</p>
+          <button
+            onClick={() => fetchMockup(true)}
+            className="mt-2 text-xs text-zinc-400 hover:text-white underline"
+          >
+            Nochmal versuchen
+          </button>
+        </div>
+      ) : (
+        <div className="border border-dashed border-zinc-700 rounded-lg p-6 text-center">
+          <ImageIcon size={32} className="mx-auto text-zinc-600 mb-2" />
+          <p className="text-xs text-zinc-500">Kein Mockup</p>
+        </div>
       )}
     </div>
   )

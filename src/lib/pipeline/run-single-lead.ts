@@ -94,6 +94,8 @@ export async function runEnrichmentForLead(
 
     const updateData: Record<string, unknown> = {
       enrichment_status: 'completed',
+      // Mockup-Cache invalidieren — Enrichment liefert neue Farben/Logo
+      mockup_png_url: null,
       website_description: scrapeData.description || lead.website_description,
       social_links: scrapeData.socialLinks || lead.social_links,
       has_existing_loyalty: scrapeData.loyaltyDetected || lead.has_existing_loyalty,
@@ -362,6 +364,21 @@ export async function runPassEmailForLead(
       }
     } catch (err) {
       steps.emails = { success: false, error: err instanceof Error ? err.message : 'Failed' }
+    }
+
+    // ═══ STEP 6: Mockup-PNG generieren (Block 4) ══════════════════
+    // Non-blocking: wenn Mockup fehlschlägt, bleibt Phase B trotzdem erfolgreich.
+    const mockupStart = Date.now()
+    try {
+      const mockupRes = await fetch(`${baseUrl}/api/leads/${leadId}/mockup?force=1`, { method: 'GET' })
+      if (mockupRes.ok) {
+        const mockupData = await mockupRes.json() as { url: string; size_kb: number }
+        steps.mockup = { success: true, durationMs: Date.now() - mockupStart, url: mockupData.url, size_kb: mockupData.size_kb }
+      } else {
+        steps.mockup = { success: false, error: `HTTP ${mockupRes.status}` }
+      }
+    } catch (err) {
+      steps.mockup = { success: false, error: err instanceof Error ? err.message : 'Failed' }
     }
 
     return { success: true, durationMs: Date.now() - startTime, steps }

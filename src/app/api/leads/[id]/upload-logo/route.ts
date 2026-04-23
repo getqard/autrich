@@ -56,6 +56,7 @@ export async function POST(
   const { error: updateErr } = await supabase.from('leads').update({
     logo_url: urlData.publicUrl,
     logo_source: 'website',
+    mockup_png_url: null, // Cache invalidieren (Block 4)
   }).eq('id', id)
 
   if (updateErr) {

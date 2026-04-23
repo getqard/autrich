@@ -91,6 +91,11 @@ export async function POST(
         updateData.strip_image_url = body.strip_image_url
       }
 
+      // Mockup-Cache invalidieren wenn Farben/Strip geändert (Block 4)
+      if (Object.keys(updateData).length > 0) {
+        updateData.mockup_png_url = null
+      }
+
       if (Object.keys(updateData).length > 0) {
         const { error: updateErr } = await supabase.from('leads').update(updateData).eq('id', id)
         if (updateErr) {
