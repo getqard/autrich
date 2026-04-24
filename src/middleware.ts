@@ -5,6 +5,8 @@ import { NextResponse, type NextRequest } from 'next/server'
  *
  * deine-treuekarte.de (Download-Domain):
  *   → /d/*              Download pages
+ *   → /impressum        Pflicht-Page für Email-Footer-Link (Block 5)
+ *   → /datenschutz      DSGVO-Info-Page (Block 5)
  *   → /api/passes/*     Pass downloads
  *   → /api/tracking     Click/visit tracking
  *   → /api/webhooks/*   Instantly webhooks
@@ -30,6 +32,8 @@ export function middleware(request: NextRequest) {
 
     const allowed =
       path.startsWith('/d/') ||
+      path === '/impressum' ||      // Block 5
+      path === '/datenschutz' ||    // Block 5
       path.startsWith('/api/passes/') ||
       path.startsWith('/api/tracking') ||
       path.startsWith('/api/webhooks/') ||

@@ -186,7 +186,7 @@ Diese Entscheidungen hat Lano getroffen. Claude soll sie in jedem Block als Grun
 | 2. A/B Testing Umstellung | ✅ Fertig (`c2d6f36`) | `Starte Block 2: A/B Testing Umstellung aus MASTERPLAN.md.` |
 | 3. Swipe-Infrastruktur | ✅ Fertig | `Starte Block 3: Swipe-Infrastruktur aus MASTERPLAN.md.` |
 | 4. Mockup-Generator | ✅ Fertig | `Starte Block 4: Mockup-Generator aus MASTERPLAN.md.` |
-| 5. Impressum & Footer | ⬜ Offen | `Starte Block 5: Impressum & Footer aus MASTERPLAN.md.` |
+| 5. Impressum & Footer | ✅ Fertig (Platzhalter — echte LLC-Daten via Vercel ENV setzen) | `Starte Block 5: Impressum & Footer aus MASTERPLAN.md.` |
 | 6. Instantly Integration | ⬜ Offen | `Starte Block 6: Instantly Integration aus MASTERPLAN.md.` |
 | 7. Follow-ups | ⬜ Offen | `Starte Block 7: Follow-ups aus MASTERPLAN.md.` |
 | 8. Analytics Dashboard | ⬜ Offen | `Starte Block 8: Analytics aus MASTERPLAN.md.` |
