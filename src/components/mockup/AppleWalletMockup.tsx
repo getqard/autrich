@@ -30,6 +30,8 @@ export type MockupInput = {
   detected_pass_title: string
   qr_data_url: string // Already generated PNG data URL
   filled_stamps?: number // Default: 2
+  /** Wenn gesetzt UND kein Logo vorhanden: zeigt Branchen-Emoji statt Text-Logo */
+  industry_emoji?: string | null
 }
 
 /**
@@ -184,6 +186,42 @@ export function buildMockupJsx(i: MockupInput): ReactElement {
                   style={{ objectFit: 'contain', maxHeight: '44px', maxWidth: '160px' }}
                   alt=""
                 />
+              ) : i.industry_emoji ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '48px',
+                      height: '48px',
+                      borderRadius: '24px',
+                      background: 'rgba(255,255,255,0.15)',
+                      fontSize: '28px',
+                    }}
+                  >
+                    {i.industry_emoji}
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      fontSize: '20px',
+                      fontWeight: 700,
+                      color: text,
+                      letterSpacing: '0.5px',
+                      maxWidth: '180px',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {i.business_name.slice(0, 18)}
+                  </div>
+                </div>
               ) : (
                 <div
                   style={{

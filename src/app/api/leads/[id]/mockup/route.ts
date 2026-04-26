@@ -4,6 +4,8 @@ import QRCode from 'qrcode'
 import sharp from 'sharp'
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildMockupJsx, type MockupInput } from '@/components/mockup/AppleWalletMockup'
+import { buildGenericMockup } from '@/lib/wallet/generic-mockup'
+import { resolveMockupMode } from '@/lib/wallet/quality-gate'
 import type { Lead } from '@/lib/supabase/types'
 
 export const runtime = 'nodejs'
@@ -31,6 +33,10 @@ export async function GET(
   const url = new URL(request.url)
   const force = url.searchParams.get('force') === '1'
   const inline = url.searchParams.get('inline') === '1'
+  const modeParam = url.searchParams.get('mode')
+  const queryMode = modeParam === 'scraped' || modeParam === 'generic' || modeParam === 'auto'
+    ? modeParam
+    : null
 
   const { data: leadData, error } = await supabase
     .from('leads')
@@ -44,9 +50,25 @@ export async function GET(
 
   const lead = leadData as Lead
 
-  // Cache-Hit (nicht wenn force oder inline)
-  if (!force && !inline && lead.mockup_png_url) {
-    return NextResponse.json({ url: lead.mockup_png_url, cached: true })
+  // Mode resolution: query > extra_data > 'auto'
+  const extraData = (lead.extra_data || {}) as Record<string, unknown>
+  const persistedMode = extraData.mockup_mode === 'scraped' || extraData.mockup_mode === 'generic' || extraData.mockup_mode === 'auto'
+    ? extraData.mockup_mode as 'scraped' | 'generic' | 'auto'
+    : 'auto'
+  const userMode = queryMode || persistedMode
+  const resolved = resolveMockupMode(lead, userMode)
+
+  // Cache-Hit nur wenn:
+  //   - nicht force/inline
+  //   - URL existiert
+  //   - kein expliziter mode override (sonst würde cache den alten mode zeigen)
+  if (!force && !inline && !queryMode && lead.mockup_png_url) {
+    return NextResponse.json({
+      url: lead.mockup_png_url,
+      cached: true,
+      mode: resolved.effective,
+      quality_ok: resolved.quality.ok,
+    })
   }
 
   // ── QR-Code generieren (Demo-URL zur Download-Page) ──
@@ -61,19 +83,31 @@ export async function GET(
     color: { dark: '#000000', light: '#FFFFFF' },
   })
 
-  // ── Logo als Base64 (Satori kann HTTPS-URLs nutzen, base64 ist aber zuverlässiger) ──
-  const logoBase64 = lead.logo_url ? await fetchAsDataUrl(lead.logo_url) : null
+  // ── Logo + Strip als Base64 ──
+  // Im Generic-Modus: kein Logo, stattdessen Industry-Emoji im Component
+  const useScraped = resolved.effective === 'scraped'
+  const logoBase64 = useScraped && lead.logo_url ? await fetchAsDataUrl(lead.logo_url) : null
   const stripBase64 = lead.strip_image_url ? await fetchAsDataUrl(lead.strip_image_url) : null
+
+  // Farben: Scraped aus DB ODER Generic aus Industry-Defaults (mit harter WCAG-Logic)
+  const generic = buildGenericMockup(lead)
+  const dominantColor = useScraped ? (lead.dominant_color || generic.dominant_color) : generic.dominant_color
+  const textColor = useScraped ? (lead.text_color || generic.text_color) : generic.text_color
+  const labelColor = useScraped ? (lead.label_color || generic.label_color) : generic.label_color
+  const industryEmoji = useScraped ? null : generic.industry_emoji
+
+  console.log(`[Mockup] Lead ${id} mode=${userMode} → effective=${resolved.effective} (${resolved.quality.reason})`)
 
   const mockupInput: MockupInput = {
     business_name: lead.business_name,
-    logo_url: lead.logo_url,
+    logo_url: useScraped ? lead.logo_url : null,
     logo_base64: logoBase64,
     strip_image_url: lead.strip_image_url,
     strip_image_base64: stripBase64,
-    dominant_color: lead.dominant_color || '#0a0a0a',
-    text_color: lead.text_color || '#ffffff',
-    label_color: lead.label_color || '#9ca3af',
+    dominant_color: dominantColor,
+    text_color: textColor,
+    label_color: labelColor,
+    industry_emoji: industryEmoji,
     detected_reward: lead.detected_reward,
     detected_reward_emoji: lead.detected_reward_emoji,
     detected_stamp_emoji: lead.detected_stamp_emoji,
@@ -129,13 +163,20 @@ export async function GET(
   const { data: urlData } = supabase.storage.from('scrape-cache').getPublicUrl(path)
   const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`
 
-  await supabase.from('leads').update({ mockup_png_url: publicUrl }).eq('id', id)
+  // Persist URL nur wenn kein query-mode-Override (sonst Cache-Drift bei Auto)
+  if (!queryMode) {
+    await supabase.from('leads').update({ mockup_png_url: publicUrl }).eq('id', id)
+  }
 
   return NextResponse.json({
     url: publicUrl,
     size_kb: Math.round(finalBuffer.length / 1024),
     content_type: contentType,
     cached: false,
+    mode: resolved.effective,
+    user_mode: userMode,
+    quality_ok: resolved.quality.ok,
+    quality_reason: resolved.quality.reason,
   })
 }
 
