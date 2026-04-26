@@ -417,6 +417,12 @@ function ScrapingPageInner() {
         })
         await loadResults(state.jobId)
         setSelected(new Set())
+
+        // Wenn Import in eine Campaign ging und Leads tatsächlich landeten:
+        // direkt zurück zur Kampagne, damit der User seine Leads sofort sieht.
+        if (data.campaign_id && (data.imported || 0) > 0) {
+          setTimeout(() => router.push(`/campaigns/${data.campaign_id}`), 1200)
+        }
       } else {
         alert(`Import fehlgeschlagen: ${data.error}`)
       }
@@ -446,12 +452,29 @@ function ScrapingPageInner() {
 
   const visibleResults = getVisibleResults()
 
+  const targetCampaign = campaigns.find((c) => c.id === selectedCampaignId)
+
   return (
     <div>
       <h2 className="text-2xl font-bold mb-2">Manuelles Scraping</h2>
-      <p className="text-zinc-400 text-sm mb-8">
+      <p className="text-zinc-400 text-sm mb-4">
         Eine Branche + eine Stadt scrapen, Ergebnisse inspizieren, filtern und importieren.
       </p>
+
+      {targetCampaign && (
+        <div className="mb-6 px-4 py-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-sm flex items-center justify-between">
+          <span>
+            Import-Ziel: <strong className="text-white">{targetCampaign.name}</strong>
+            <span className="text-zinc-500"> · gefundene Leads landen direkt in dieser Kampagne</span>
+          </span>
+          <button
+            onClick={() => setSelectedCampaignId('')}
+            className="text-xs text-zinc-500 hover:text-white"
+          >
+            Andere wählen
+          </button>
+        </div>
+      )}
 
       {/* Search Form */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 mb-6">
