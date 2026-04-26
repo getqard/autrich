@@ -956,8 +956,6 @@ function Field({ label, value }: { label: string; value: string }) {
 }
 
 const LOGO_SOURCE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  brandfetch: { bg: 'bg-blue-500/10', text: 'text-blue-400', label: 'Brandfetch' },
-  'brandfetch-lettermark': { bg: 'bg-blue-500/10', text: 'text-blue-300', label: 'Brandfetch LM' },
   website: { bg: 'bg-green-500/10', text: 'text-green-400', label: 'Website' },
   instagram: { bg: 'bg-purple-500/10', text: 'text-purple-400', label: 'Instagram' },
   gmaps: { bg: 'bg-orange-500/10', text: 'text-orange-400', label: 'GMaps' },

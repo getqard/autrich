@@ -1,11 +1,11 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Loader2, Globe, RefreshCw, Brain,
-  Wallet, Mail, Eye, Calendar,
+  Wallet, Mail, Eye,
   Ban, Trash2, Download, ExternalLink, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import type { Lead, PipelineStatus } from '@/lib/supabase/types'
@@ -20,6 +20,7 @@ const PIPELINE_OPTIONS: PipelineStatus[] = [
 
 export default function LeadDetailPage() {
   const params = useParams()
+  const router = useRouter()
   const id = params.id as string
 
   const [lead, setLead] = useState<LeadWithEvents | null>(null)
@@ -60,6 +61,26 @@ export default function LeadDetailPage() {
       body: JSON.stringify({ pipeline_status: status }),
     })
     loadLead()
+  }
+
+  async function blacklistLead() {
+    if (!confirm('Lead blacklisten und löschen? Email wird auf Blacklist gesetzt — keine Re-Imports mehr möglich.')) return
+    setActionLoading('blacklist')
+    try {
+      const res = await fetch(`/api/leads/${id}?blacklist=true`, { method: 'DELETE' })
+      if (res.ok) router.push('/leads')
+      else alert('Blacklist fehlgeschlagen')
+    } finally { setActionLoading(null) }
+  }
+
+  async function deleteLead() {
+    if (!confirm('Lead unwiderruflich löschen? (Email kommt nicht auf Blacklist — kann beim nächsten Scrape wieder reinkommen.)')) return
+    setActionLoading('delete')
+    try {
+      const res = await fetch(`/api/leads/${id}`, { method: 'DELETE' })
+      if (res.ok) router.push('/leads')
+      else alert('Löschen fehlgeschlagen')
+    } finally { setActionLoading(null) }
   }
 
   async function runFullPipeline() {
@@ -467,14 +488,21 @@ export default function LeadDetailPage() {
                 <Eye size={14} /> Download Page Preview
               </a>
             )}
-            <button className="flex items-center gap-2 px-3 py-2 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 mb-2 w-full text-left">
-              <Calendar size={14} /> Calendly Link senden
+            <button
+              onClick={blacklistLead}
+              disabled={actionLoading === 'blacklist'}
+              className="flex items-center gap-2 px-3 py-2 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 mb-2 w-full text-left text-red-400 disabled:opacity-50"
+            >
+              {actionLoading === 'blacklist' ? <Loader2 size={14} className="animate-spin" /> : <Ban size={14} />}
+              Blacklist + löschen
             </button>
-            <button className="flex items-center gap-2 px-3 py-2 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 mb-2 w-full text-left text-red-400">
-              <Ban size={14} /> Blacklist
-            </button>
-            <button className="flex items-center gap-2 px-3 py-2 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 w-full text-left text-red-400">
-              <Trash2 size={14} /> Lead löschen
+            <button
+              onClick={deleteLead}
+              disabled={actionLoading === 'delete'}
+              className="flex items-center gap-2 px-3 py-2 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 w-full text-left text-red-400 disabled:opacity-50"
+            >
+              {actionLoading === 'delete' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              Lead löschen
             </button>
           </Section>
 
@@ -549,8 +577,6 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 const LOGO_SOURCE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  brandfetch: { bg: 'bg-blue-500/10', text: 'text-blue-400', label: 'Brandfetch' },
-  'brandfetch-lettermark': { bg: 'bg-blue-500/10', text: 'text-blue-300', label: 'Brandfetch LM' },
   website: { bg: 'bg-green-500/10', text: 'text-green-400', label: 'Website' },
   gmaps: { bg: 'bg-orange-500/10', text: 'text-orange-400', label: 'GMaps Foto' },
   favicon: { bg: 'bg-zinc-700', text: 'text-zinc-400', label: 'Favicon' },
