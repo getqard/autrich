@@ -6,7 +6,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Upload, Loader2, CheckCircle2, XCircle,
   AlertTriangle, FileSpreadsheet, Users, Play, Square,
-  Zap, ClipboardCheck, Filter, Layers
+  Zap, ClipboardCheck, Filter, Layers, Search
 } from 'lucide-react'
 
 type CampaignDetail = {
@@ -231,14 +231,22 @@ export default function CampaignDetailPage() {
             {campaign.total_leads} Leads · Status: {campaign.status} · {new Date(campaign.created_at).toLocaleDateString('de-DE')}
           </p>
         </div>
-        {campaign.total_leads > 0 && (
+        <div className="flex items-center gap-3">
           <Link
-            href={`/leads?campaign_id=${campaign.id}`}
+            href={`/scraping?campaign_id=${campaign.id}`}
             className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 transition-colors"
           >
-            <Users size={16} /> Leads ansehen
+            <Search size={16} /> Mit Scraping befüllen
           </Link>
-        )}
+          {campaign.total_leads > 0 && (
+            <Link
+              href={`/leads?campaign_id=${campaign.id}`}
+              className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 transition-colors"
+            >
+              <Users size={16} /> Leads ansehen
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* Stats */}

@@ -9,6 +9,11 @@ import {
 } from 'lucide-react'
 import type { Industry, ScrapeResultRaw } from '@/lib/supabase/types'
 
+type CampaignOption = {
+  id: string
+  name: string
+}
+
 type ResultWithDedup = ScrapeResultRaw & {
   is_duplicate: boolean
   is_chain_duplicate: boolean
@@ -53,7 +58,9 @@ function ScrapingPageInner() {
   const router = useRouter()
 
   const [industries, setIndustries] = useState<Industry[]>([])
+  const [campaigns, setCampaigns] = useState<CampaignOption[]>([])
   const [selectedIndustry, setSelectedIndustry] = useState('')
+  const [selectedCampaignId, setSelectedCampaignId] = useState('')
   const [city, setCity] = useState('')
   const [maxResults, setMaxResults] = useState('')
   const [extractionMethod, setExtractionMethod] = useState('fast')
@@ -69,7 +76,13 @@ function ScrapingPageInner() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [showFiltered, setShowFiltered] = useState(true)
   const [importing, setImporting] = useState(false)
-  const [importResult, setImportResult] = useState<{ imported: number; duplicates: number } | null>(null)
+  const [importResult, setImportResult] = useState<{
+    imported: number
+    skipped: number
+    importedWithoutEmail: number
+    skippedDuplicates: number
+    skippedMissingContact: number
+  } | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
 
   const pollingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -79,11 +92,12 @@ function ScrapingPageInner() {
   // --- Helpers ---
 
   function setJobIdInUrl(jobId: string | null) {
-    if (jobId) {
-      router.replace(`?jobId=${jobId}`, { scroll: false })
-    } else {
-      router.replace('?', { scroll: false })
-    }
+    const params = new URLSearchParams(searchParams.toString())
+    if (jobId) params.set('jobId', jobId)
+    else params.delete('jobId')
+
+    const query = params.toString()
+    router.replace(query ? `?${query}` : '?', { scroll: false })
   }
 
   const loadResults = useCallback(async (jobId: string) => {
@@ -235,7 +249,23 @@ function ScrapingPageInner() {
       .then(data => {
         if (Array.isArray(data)) setIndustries(data)
       })
+
+    fetch('/api/campaigns')
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setCampaigns(data.map((campaign: CampaignOption) => ({
+            id: campaign.id,
+            name: campaign.name,
+          })))
+        }
+      })
   }, [])
+
+  useEffect(() => {
+    const campaignId = searchParams.get('campaign_id')
+    if (campaignId) setSelectedCampaignId(campaignId)
+  }, [searchParams])
 
   // --- Reconnect on page load ---
   useEffect(() => {
@@ -369,12 +399,21 @@ function ScrapingPageInner() {
       const res = await fetch(`/api/scraping/search/${state.jobId}/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ result_ids: Array.from(selected) }),
+        body: JSON.stringify({
+          result_ids: Array.from(selected),
+          campaign_id: selectedCampaignId || undefined,
+        }),
       })
 
       const data = await res.json()
       if (res.ok) {
-        setImportResult({ imported: data.imported, duplicates: data.duplicates })
+        setImportResult({
+          imported: data.imported || 0,
+          skipped: data.skipped || data.duplicates || 0,
+          importedWithoutEmail: data.imported_without_email || 0,
+          skippedDuplicates: data.skipped_duplicates || data.duplicates || 0,
+          skippedMissingContact: data.skipped_missing_contact || 0,
+        })
         await loadResults(state.jobId)
         setSelected(new Set())
       } else {
@@ -416,6 +455,21 @@ function ScrapingPageInner() {
       {/* Search Form */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 mb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1.5">Kampagne</label>
+            <select
+              value={selectedCampaignId}
+              onChange={(e) => setSelectedCampaignId(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+            >
+              <option value="">Globaler Lead-Pool (ohne Kampagne)</option>
+              {campaigns.map((campaign) => (
+                <option key={campaign.id} value={campaign.id}>
+                  {campaign.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <div>
             <label className="block text-xs text-zinc-500 mb-1.5">Branche</label>
             <input
@@ -632,7 +686,10 @@ function ScrapingPageInner() {
           <CheckCircle2 size={18} className="text-green-400" />
           <p className="text-sm text-green-400">
             {importResult.imported} Leads importiert
-            {importResult.duplicates > 0 && ` · ${importResult.duplicates} Duplikate übersprungen`}
+            {importResult.importedWithoutEmail > 0 && ` · ${importResult.importedWithoutEmail} ohne E-Mail`}
+            {importResult.skippedDuplicates > 0 && ` · ${importResult.skippedDuplicates} Duplikate`}
+            {importResult.skippedMissingContact > 0 && ` · ${importResult.skippedMissingContact} ohne Kontakt/Website`}
+            {importResult.skipped > 0 && importResult.skippedDuplicates === 0 && importResult.skippedMissingContact === 0 && ` · ${importResult.skipped} übersprungen`}
           </p>
         </div>
       )}
@@ -787,6 +844,8 @@ function ScrapingPageInner() {
                         </span>
                       ) : !r.passes_filter ? (
                         <span className="text-zinc-600">Gefiltert</span>
+                      ) : !r.email ? (
+                        <span className="text-zinc-500">Keine E-Mail</span>
                       ) : null}
                     </td>
                   </tr>

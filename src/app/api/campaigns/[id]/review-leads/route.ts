@@ -41,7 +41,7 @@ export async function GET(
       ab_group, ab_group_override,
       google_rating, google_reviews_count,
       contact_name, pass_status, email_status, lead_score,
-      download_page_slug, pass_serial
+      download_page_slug, pass_serial, mockup_png_url
     `)
     .eq('campaign_id', id)
     .eq('pass_status', 'ready')

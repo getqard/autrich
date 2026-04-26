@@ -23,8 +23,6 @@ const navItems = [
 
 const scrapingItems = [
   { href: '/scraping', label: 'Manuell' },
-  { href: '/scraping/plans', label: 'Pläne' },
-  { href: '/scraping/industries', label: 'Branchen' },
   { href: '/scraping/coverage', label: 'Coverage' },
 ]
 

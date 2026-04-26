@@ -15,6 +15,11 @@ function generateSlug(name: string, city?: string | null): string {
   return `${base}-${Date.now().toString(36).slice(-4)}`
 }
 
+function normalizeName(value: string | null | undefined): string | null {
+  const normalized = value?.toLowerCase().trim()
+  return normalized || null
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ jobId: string; action: string[] }> }
@@ -112,7 +117,30 @@ export async function GET(
       .order('created_at', { ascending: false })
       .limit(500)
 
-    return NextResponse.json({ results: results || [], count: results?.length || 0 })
+    const chainDomains = new Set<string>()
+    const summary = (results || []).reduce((acc, result) => {
+      const typed = result as Record<string, unknown>
+      acc.total++
+      if (typed.passes_filter) acc.passes_filter++
+      if (typed.is_duplicate) acc.duplicates++
+      if (typed.is_chain_duplicate) {
+        acc.chain_duplicates++
+        if (typeof typed.chain_domain === 'string' && typed.chain_domain) {
+          chainDomains.add(typed.chain_domain)
+        }
+      }
+      return acc
+    }, {
+      total: 0,
+      passes_filter: 0,
+      duplicates: 0,
+      chain_duplicates: 0,
+      chains_detected: 0,
+    })
+
+    summary.chains_detected = chainDomains.size
+
+    return NextResponse.json({ results: results || [], count: results?.length || 0, summary })
   }
 
   return NextResponse.json({ error: `Unknown GET action: ${act}` }, { status: 400 })
@@ -169,6 +197,9 @@ export async function POST(
     let body: Record<string, unknown> = {}
     try { body = await request.json() } catch { /* no body */ }
     const campaignId = body.campaign_id as string | undefined
+    const selectedIds = Array.isArray(body.result_ids)
+      ? new Set((body.result_ids as string[]).filter(Boolean))
+      : null
 
     const { data: rawResults } = await supabase
       .from('scrape_results_raw').select('*').eq('job_id', jobId)
@@ -177,32 +208,56 @@ export async function POST(
       return NextResponse.json({ error: 'Keine Ergebnisse' }, { status: 400 })
     }
 
-    // Dedup: load existing emails + normalized business names
+    const resultsToImport = selectedIds
+      ? rawResults.filter((result) => selectedIds.has(result.id))
+      : rawResults
+
+    if (resultsToImport.length === 0) {
+      return NextResponse.json({ error: 'Keine ausgewählten Ergebnisse gefunden' }, { status: 400 })
+    }
+
+    // Dedup: load existing emails + normalized business names + place IDs
     const { data: existingLeads } = await supabase
       .from('leads')
-      .select('email, business_name')
+      .select('email, business_name, extra_data')
     const existingEmails = new Set(
       (existingLeads || []).map(l => l.email?.toLowerCase()).filter(Boolean)
     )
     const existingNames = new Set(
-      (existingLeads || []).map(l => l.business_name?.toLowerCase().trim()).filter(Boolean)
+      (existingLeads || []).map(l => normalizeName(l.business_name)).filter(Boolean)
+    )
+    const existingPlaceIds = new Set(
+      (existingLeads || [])
+        .map((lead) => {
+          const extra = (lead.extra_data || {}) as Record<string, unknown>
+          return typeof extra.gmaps_place_id === 'string' ? extra.gmaps_place_id : null
+        })
+        .filter(Boolean)
     )
     // Track names within this batch too (franchise dedup)
     const batchNames = new Set<string>()
+    const batchPlaceIds = new Set<string>()
 
-    let imported = 0, skipped = 0
+    let imported = 0
+    let importedWithoutEmail = 0
+    let skipped = 0
+    let skippedDuplicates = 0
+    let skippedMissingContact = 0
     const errors: string[] = []
 
-    for (const raw of rawResults) {
+    for (const raw of resultsToImport) {
       try {
         const data = (raw.raw_data || {}) as Record<string, unknown>
         const enrichment = (data.enrichment || {}) as Record<string, unknown>
+        const normalizedName = normalizeName(raw.name || 'Unknown') || 'unknown'
+        const placeId = typeof raw.place_id === 'string' ? raw.place_id : null
+        const email = (enrichment.recommended_email as string) || raw.email || null
 
         const lead = {
           campaign_id: campaignId || null,
           business_name: raw.name || 'Unknown',
           website_url: raw.website || null,
-          email: (enrichment.recommended_email as string) || raw.email || null,
+          email,
           phone: raw.phone || null,
           city: raw.city || null,
           address: raw.address || null,
@@ -229,33 +284,73 @@ export async function POST(
           enrichment_review_status: 'pending',
         }
 
-        if (!lead.email) { skipped++; continue }
+        // Ohne Website, Email und Telefon ist der Lead im aktuellen Flow nicht brauchbar.
+        if (!lead.website_url && !lead.email && !lead.phone) {
+          skipped++
+          skippedMissingContact++
+          continue
+        }
 
         // Dedup: skip if email already exists
-        if (existingEmails.has(lead.email.toLowerCase())) { skipped++; continue }
+        if (lead.email && existingEmails.has(lead.email.toLowerCase())) {
+          skipped++
+          skippedDuplicates++
+          continue
+        }
+
+        if (placeId && (existingPlaceIds.has(placeId) || batchPlaceIds.has(placeId))) {
+          skipped++
+          skippedDuplicates++
+          continue
+        }
 
         // Dedup: skip if exact same business name already exists (franchise/chain)
-        const normalizedName = lead.business_name.toLowerCase().trim()
-        if (existingNames.has(normalizedName) || batchNames.has(normalizedName)) { skipped++; continue }
+        if (existingNames.has(normalizedName) || batchNames.has(normalizedName)) {
+          skipped++
+          skippedDuplicates++
+          continue
+        }
 
         // Track for batch dedup
-        existingEmails.add(lead.email.toLowerCase())
+        if (lead.email) {
+          existingEmails.add(lead.email.toLowerCase())
+        }
         batchNames.add(normalizedName)
+        if (placeId) {
+          existingPlaceIds.add(placeId)
+          batchPlaceIds.add(placeId)
+        }
 
         const { error: insertErr } = await supabase.from('leads').insert(lead)
         if (insertErr) {
-          if (insertErr.message.includes('duplicate')) { skipped++; continue }
+          if (insertErr.message.includes('duplicate')) {
+            skipped++
+            skippedDuplicates++
+            continue
+          }
           errors.push(`${raw.name}: ${insertErr.message}`)
           continue
         }
         imported++
+        if (!lead.email) {
+          importedWithoutEmail++
+        }
       } catch (err) {
         errors.push(`${raw.name}: ${err instanceof Error ? err.message : 'Unknown'}`)
       }
     }
 
     await supabase.from('scrape_jobs').update({ imported_count: imported }).eq('id', jobId)
-    return NextResponse.json({ imported, skipped, errors, total: rawResults.length })
+    return NextResponse.json({
+      imported,
+      imported_without_email: importedWithoutEmail,
+      skipped,
+      skipped_duplicates: skippedDuplicates,
+      skipped_missing_contact: skippedMissingContact,
+      duplicates: skippedDuplicates,
+      errors,
+      total: resultsToImport.length,
+    })
   }
 
   return NextResponse.json({ error: `Unknown POST action: ${act}` }, { status: 400 })

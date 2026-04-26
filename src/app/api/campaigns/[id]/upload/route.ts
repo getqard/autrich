@@ -276,10 +276,15 @@ export async function POST(
     }
   }
 
+  const { count: totalLeadCount } = await supabase
+    .from('leads')
+    .select('id', { count: 'exact', head: true })
+    .eq('campaign_id', campaignId)
+
   // Update campaign totals
   await supabase
     .from('campaigns')
-    .update({ total_leads: insertedCount })
+    .update({ total_leads: totalLeadCount || 0 })
     .eq('id', campaignId)
 
   return NextResponse.json({

@@ -4,9 +4,9 @@ import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ArrowLeft, Loader2, Globe, RefreshCw, Brain, Image,
-  Wallet, Smartphone, Mail, MessageSquare, Eye, Calendar,
-  Ban, Trash2, Download, ExternalLink, Send, ChevronDown, ChevronUp,
+  ArrowLeft, Loader2, Globe, RefreshCw, Brain,
+  Wallet, Mail, Eye, Calendar,
+  Ban, Trash2, Download, ExternalLink, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import type { Lead, PipelineStatus } from '@/lib/supabase/types'
 
@@ -175,7 +175,7 @@ export default function LeadDetailPage() {
           ) : (
             <>
               <Wallet size={18} />
-              Kompletter Flow: Scrape → Pass → Download-Seite → 5 Emails
+              Kompletter Flow: Scrape → Pass → Download-Seite → A/B Email
             </>
           )}
         </button>
@@ -348,9 +348,7 @@ export default function LeadDetailPage() {
                   <ExternalLink size={12} /> Google Save
                 </a>
               )}
-              <ActionButton icon={Image} label="Re-Generate Strip" action="generate-strip" loading={actionLoading} onClick={runAction} />
               <ActionButton icon={Wallet} label="Re-Generate Pass" action="generate-pass" loading={actionLoading} onClick={runAction} />
-              <ActionButton icon={Smartphone} label="Re-Generate Preview" action="generate-preview" loading={actionLoading} onClick={runAction} />
             </div>
           </Section>
         </div>
@@ -386,15 +384,14 @@ export default function LeadDetailPage() {
               <button onClick={runAllEmails} disabled={emailsLoading}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 rounded-lg text-xs text-white hover:bg-amber-500 disabled:opacity-50">
                 {emailsLoading ? <Loader2 size={12} className="animate-spin" /> : <Mail size={12} />}
-                Alle 5 Strategien
+                Alle Strategien (Legacy)
               </button>
-              <ActionButton icon={Send} label="Test an mich" action="send-test" loading={actionLoading} onClick={runAction} />
             </div>
           </Section>
 
           {/* All 5 Email Strategies */}
           {allEmails && (
-            <Section title="Alle 5 Strategien">
+            <Section title="Alle Strategien (Legacy)">
               <div className="space-y-3">
                 {allEmails.map((email, i) => (
                   <div key={i} className="bg-zinc-800 rounded-lg p-3">
@@ -436,9 +433,6 @@ export default function LeadDetailPage() {
                   </div>
                 </div>
               )}
-              <div className="flex gap-2 mt-4">
-                <ActionButton icon={MessageSquare} label="Re-Classify" action="classify-reply" loading={actionLoading} onClick={runAction} />
-              </div>
             </Section>
           )}
 
