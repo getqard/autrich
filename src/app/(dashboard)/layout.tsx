@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -7,13 +8,24 @@ import {
   Megaphone,
   Users,
   Settings,
+  Inbox,
 } from 'lucide-react'
 
-const navItems = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard, match: (p: string) => p === '/' },
-  { href: '/campaigns', label: 'Kampagnen', icon: Megaphone, match: (p: string) => p.startsWith('/campaigns') || p.startsWith('/scraping') },
-  { href: '/leads', label: 'Leads', icon: Users, match: (p: string) => p.startsWith('/leads') },
-  { href: '/settings', label: 'Settings', icon: Settings, match: (p: string) => p.startsWith('/settings') },
+type NavItem = {
+  href: string
+  label: string
+  icon: typeof LayoutDashboard
+  match: (p: string) => boolean
+  /** Optional badge content (e.g. unread count). */
+  badgeKey?: 'inbox_unread'
+}
+
+const navItems: NavItem[] = [
+  { href: '/', label: 'Dashboard', icon: LayoutDashboard, match: (p) => p === '/' },
+  { href: '/campaigns', label: 'Kampagnen', icon: Megaphone, match: (p) => p.startsWith('/campaigns') || p.startsWith('/scraping') },
+  { href: '/leads', label: 'Leads', icon: Users, match: (p) => p.startsWith('/leads') },
+  { href: '/inbox', label: 'Inbox', icon: Inbox, match: (p) => p.startsWith('/inbox'), badgeKey: 'inbox_unread' },
+  { href: '/settings', label: 'Settings', icon: Settings, match: (p) => p.startsWith('/settings') },
 ]
 
 export default function DashboardLayout({
@@ -22,6 +34,26 @@ export default function DashboardLayout({
   children: React.ReactNode
 }) {
   const pathname = usePathname() || '/'
+  const [inboxUnread, setInboxUnread] = useState<number>(0)
+
+  // Poll Inbox-Badge alle 60s + bei Pathname-Wechsel
+  useEffect(() => {
+    let cancelled = false
+    async function tick() {
+      try {
+        const res = await fetch('/api/inbox?unread_only=true&limit=1', { cache: 'no-store' })
+        if (!cancelled && res.ok) {
+          const data = await res.json()
+          setInboxUnread(data.unread_count || 0)
+        }
+      } catch { /* ignore */ }
+    }
+    tick()
+    const t = setInterval(tick, 60_000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [pathname])
+
+  const badges: Record<string, number> = { inbox_unread: inboxUnread }
 
   return (
     <div className="flex h-screen bg-zinc-950 text-white">
@@ -34,6 +66,7 @@ export default function DashboardLayout({
           {navItems.map((item) => {
             const Icon = item.icon
             const active = item.match(pathname)
+            const badge = item.badgeKey ? badges[item.badgeKey] : 0
             return (
               <Link
                 key={item.href}
@@ -45,7 +78,16 @@ export default function DashboardLayout({
                 }`}
               >
                 <Icon size={18} />
-                {item.label}
+                <span className="flex-1">{item.label}</span>
+                {badge > 0 && (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
+                      active ? 'bg-black text-white' : 'bg-blue-500 text-white'
+                    }`}
+                  >
+                    {badge > 99 ? '99+' : badge}
+                  </span>
+                )}
               </Link>
             )
           })}

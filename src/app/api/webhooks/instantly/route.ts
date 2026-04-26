@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Lead-Status updaten
-  const update = mapEventToLeadUpdate(eventType)
+  const update = mapEventToLeadUpdate(eventType, payload)
   if (update) {
     await supabase.from('leads').update(update).eq('id', lead.id)
 
@@ -139,7 +139,7 @@ function normalizeEventType(raw: string | undefined): string | null {
   return map[raw] || raw
 }
 
-function mapEventToLeadUpdate(eventType: string): Record<string, unknown> | null {
+function mapEventToLeadUpdate(eventType: string, payload?: WebhookPayload): Record<string, unknown> | null {
   const now = new Date().toISOString()
   switch (eventType) {
     case 'sent':
@@ -148,8 +148,19 @@ function mapEventToLeadUpdate(eventType: string): Record<string, unknown> | null
       return { email_status: 'opened', email_opened_at: now }
     case 'clicked':
       return { email_status: 'clicked', email_clicked_at: now }
-    case 'replied':
-      return { email_status: 'replied', email_replied_at: now, pipeline_status: 'engaged' }
+    case 'replied': {
+      const replyText =
+        (payload?.reply_text as string | undefined) ||
+        (payload?.body as string | undefined) ||
+        (payload?.text as string | undefined) ||
+        null
+      return {
+        email_status: 'replied',
+        email_replied_at: now,
+        pipeline_status: 'engaged',
+        reply_text: replyText,
+      }
+    }
     case 'bounced':
       return { email_status: 'bounced' }
     case 'unsubscribed':
