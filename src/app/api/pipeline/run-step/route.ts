@@ -4,6 +4,7 @@ import { captureWebsite } from '@/lib/enrichment/screenshot'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
+import { selectBestLogoUrl } from '@/lib/enrichment/logo-picker'
 import { classifyIndustry, classifyBusiness, generateCreativeContent } from '@/lib/ai/classifier'
 import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
 import { matchStripTemplate, detectAccentFamily } from '@/lib/wallet/strip'
@@ -125,10 +126,13 @@ async function runLogoStep(url: string, context: Record<string, unknown>, startT
     } catch { /* non-fatal */ }
   }
 
-  // Website logo (score-based — highest score wins)
+  // Website logo — zentrale selectBestLogoUrl() macht alle Filter + Vision-AI
   if (!logoBuffer && logoCandidates?.length) {
-    const sorted = [...logoCandidates].sort((a, b) => b.score - a.score)
-    const pickedUrl = sorted[0]?.url || null
+    const selection = await selectBestLogoUrl(logoCandidates, businessName, scrapeData.title as string | null)
+    const pickedUrl = selection?.url || null
+    if (selection) {
+      console.log(`[run-step:logo] picked via ${selection.reason} (${selection.source})`)
+    }
 
     if (pickedUrl) {
       try {

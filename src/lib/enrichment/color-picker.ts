@@ -173,9 +173,12 @@ export async function pickBrandColors(
       console.log(`[AI Colors] Invalid background hex: ${rawBg}`)
       return null
     }
-    if (confidence < 0.5) {
-      console.log(`[AI Colors] Confidence too low: ${confidence}`)
+    if (confidence < 0.3) {
+      console.log(`[AI Colors] Confidence too low: ${confidence} (< 0.3) → falling back`)
       return null
+    }
+    if (confidence < 0.5) {
+      console.log(`[AI Colors] Low confidence ${confidence} but using anyway (≥ 0.3)`)
     }
 
     // ─── Post-Validation ──────────────────────────────────────

@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeWebsite } from '@/lib/enrichment/scraper'
 import { captureWebsite } from '@/lib/enrichment/screenshot'
 import { processLogo, validateLogoCandidate, fetchGoogleFavicon, generateInitialsLogo } from '@/lib/enrichment/logo'
+import { selectBestLogoUrl } from '@/lib/enrichment/logo-picker'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { fetchGmapsPhoto, cropToSquare } from '@/lib/enrichment/gmaps-photo'
 import { classifyIndustry, classifyBusiness, generateCreativeContent } from '@/lib/ai/classifier'
@@ -159,35 +160,32 @@ export async function POST(
       } catch { /* invalid URL */ }
     }
 
-    // 3b. Website Scraping Logo (with AI Picker)
+    // 3b. Website Scraping Logo — zentrale selectBestLogoUrl() (Filter + Vision-AI)
     const logoCandidates = scrapeResult?.logoCandidates as Array<{ url: string; score: number; source: string; width: number | null; height: number | null }> | undefined
 
     if (!logoBuffer && logoCandidates?.length) {
-      const sortedCandidates = [...logoCandidates]
-        .sort((a, b) => b.score - a.score)
+      const sortedCandidates = [...logoCandidates].sort((a, b) => b.score - a.score)
+      const selection = await selectBestLogoUrl(logoCandidates, lead.business_name, (scrapeResult?.title as string | null) ?? null)
 
-      // Score-based logo selection (top 3 candidates, validate each)
-      {
-        const topCandidates = sortedCandidates.slice(0, 3)
-        const validations = await Promise.all(
-          topCandidates.map(async (c: { url: string }) => ({
-            candidate: c,
-            validation: await validateLogoCandidate(c.url),
-          }))
-        )
+      // Try the AI-picked logo first, fall back to top-3 score-validated if invalid
+      const candidatesToTry = selection
+        ? [{ url: selection.url, source: selection.source }, ...sortedCandidates.slice(0, 3).filter(c => c.url !== selection.url)]
+        : sortedCandidates.slice(0, 3)
 
-        const bestValid = validations.find(v => v.validation.valid)
-        if (bestValid) {
-          try {
-            const logoResult = await processLogo(bestValid.candidate.url)
-            const thumbnailVariant = logoResult.variants.find(v => v.name === 'thumbnail')
-            if (thumbnailVariant) {
-              logoBuffer = thumbnailVariant.buffer
-              logoSource = 'website'
-            }
-          } catch (err) {
-            console.error('Website logo processing failed (non-fatal):', err)
+      for (const candidate of candidatesToTry) {
+        const validation = await validateLogoCandidate(candidate.url)
+        if (!validation.valid) continue
+        try {
+          const logoResult = await processLogo(candidate.url)
+          const thumbnailVariant = logoResult.variants.find(v => v.name === 'thumbnail')
+          if (thumbnailVariant) {
+            logoBuffer = thumbnailVariant.buffer
+            logoSource = 'website'
+            console.log(`[enrich:logo] picked ${candidate.url} (${candidate.source})${selection ? ` via ${selection.reason}` : ''}`)
+            break
           }
+        } catch (err) {
+          console.error('Website logo processing failed (non-fatal):', err)
         }
       }
     }

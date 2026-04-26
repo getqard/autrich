@@ -61,7 +61,7 @@ export async function validateLogoCandidate(url: string): Promise<LogoValidation
     }
 
     const aspectRatio = Math.max(width, height) / Math.min(width, height)
-    if (aspectRatio > 2.5) {
+    if (aspectRatio > 2.8) {
       return { valid: false, width, height, format: format || 'unknown', fileSize, reason: `Seitenverhältnis zu breit (${aspectRatio.toFixed(1)}:1)` }
     }
 
@@ -148,8 +148,8 @@ export async function processLogo(
   }
 
   const aspectRatio = Math.max(width, height) / Math.min(width, height)
-  if (aspectRatio > 2.0) {
-    throw new Error(`Seitenverhältnis zu breit (${aspectRatio.toFixed(1)}:1, max 2:1)`)
+  if (aspectRatio > 2.8) {
+    throw new Error(`Seitenverhältnis zu breit (${aspectRatio.toFixed(1)}:1, max 2.8:1)`)
   }
 
   // Background detection + removal

@@ -4,6 +4,7 @@ import { captureWebsite } from '@/lib/enrichment/screenshot'
 import { fetchGoogleFavicon, generateInitialsLogo, validateLogoCandidate } from '@/lib/enrichment/logo'
 import { fetchInstagramAvatar } from '@/lib/enrichment/instagram'
 import { determinePassColors } from '@/lib/enrichment/pass-colors'
+import { selectBestLogoUrl } from '@/lib/enrichment/logo-picker'
 import { checkLogoVisibility } from '@/lib/enrichment/logo-contrast-check'
 import { getCachedScrape, setCachedScrape } from '@/lib/enrichment/scrape-cache'
 import { scrapeImpressum, extractHeadlines, extractAboutPage } from '@/lib/enrichment/impressum'
@@ -168,100 +169,15 @@ export async function POST(request: NextRequest) {
 
       // Normal website flow
 
-      // 1. Website logo — use bestLogo from scraper (score-based)
-      // Then: third-party filter + business-name-in-URL override
+      // 1. Website logo — zentrale selectBestLogoUrl() macht alle Filter + Vision-AI
       if (result.logoCandidates?.length) {
-        const THIRD_PARTY = ['instagram', 'insta-', 'insta_', 'facebook', 'fb-logo', 'tiktok', 'tik-tok',
-          'youtube', 'yt-logo', 'whatsapp', 'telegram', 'pinterest', 'linkedin', 'snapchat',
-          'lieferando', 'uber-logo', 'uber_logo', 'ubereats', 'deliveroo', 'wolt', 'doordash',
-          'just-eat', 'foodora', 'gorillas', 'flink', 'yelp', 'tripadvisor', 'trustpilot',
-          'paypal', 'stripe', 'klarna', 'visa', 'mastercard', 'wp-emoji', 'elementor']
-        const isThirdParty = (url: string) => THIRD_PARTY.some(p => url.toLowerCase().includes(p))
-
-        // Normalize text for fuzzy matching (handles umlauts: ö→o AND ö→oe)
-        const normalize = (s: string) => s.toLowerCase()
-          .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-          .replace(/[^a-z0-9]/g, ' ').trim()
-        const germanize = (s: string) => s.toLowerCase()
-          .replace(/ö/g, 'oe').replace(/ä/g, 'ae').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
-          .replace(/[^a-z0-9]/g, ' ').trim()
-
-        // Extract significant words (≥3 chars) from business name + title
-        const nameSource = `${business_name || ''} ${result.title || ''}`
-        const nameWordsNorm = normalize(nameSource).split(/\s+/).filter(w => w.length >= 3)
-        const nameWordsGerm = germanize(nameSource).split(/\s+/).filter(w => w.length >= 3)
-
-        // Check if a URL contains business name words
-        const getNameMatchCount = (url: string): number => {
-          const urlNorm = normalize(url)
-          const urlGerm = germanize(url)
-          let matches = 0
-          for (const word of nameWordsNorm) {
-            if (urlNorm.includes(word) || urlGerm.includes(word)) matches++
-          }
-          for (const word of nameWordsGerm) {
-            if (urlNorm.includes(word) || urlGerm.includes(word)) matches++
-          }
-          // Deduplicate (a word might match in both normalized forms)
-          return Math.min(matches, nameWordsNorm.length)
+        const selection = await selectBestLogoUrl(result.logoCandidates, business_name || '', result.title)
+        const pickedUrl = selection?.url || null
+        if (selection) {
+          console.log(`[Scrape] Logo picked via ${selection.reason} (${selection.source}, score ${selection.score})`)
         }
 
-        // Start with bestLogo
-        let pickedUrl = result.bestLogo?.url || null
 
-        // Filter: if bestLogo is third-party → next best
-        if (pickedUrl && isThirdParty(pickedUrl)) {
-          console.log(`[Scrape] bestLogo is third-party, finding next...`)
-          const nextBest = result.logoCandidates
-            .filter(c => !isThirdParty(c.url) && c.score >= 40)
-            .sort((a, b) => b.score - a.score)[0]
-          pickedUrl = nextBest?.url || null
-        }
-
-        // Photo/image detection — these are NEVER logos even if they contain the business name
-        const PHOTO_PATTERNS = [
-          'image', 'photo', 'bild', 'foto', 'hochformat', 'querformat',
-          'hero', 'banner', 'slider', 'intro', 'startseite', 'background',
-          'header-bg', 'cover', 'gallery', 'portfolio', 'preview',
-          'dsc', 'img_', 'pic_', 'screenshot', 'thumbnail',
-        ]
-        const isLikelyPhoto = (url: string) => {
-          const filename = url.toLowerCase().split('/').pop() || ''
-          return PHOTO_PATTERNS.some(p => filename.includes(p))
-        }
-
-        // Override: if another candidate has the business name in FILENAME → prefer it
-        // But ONLY for candidates that look like logos, NOT photos
-        if (pickedUrl && nameWordsNorm.length >= 1) {
-          const getFilename = (u: string) => {
-            try { return decodeURIComponent(new URL(u).pathname.split('/').pop() || '') } catch { return u }
-          }
-          const getFilenameMatchCount = (u: string): number => {
-            const fn = getFilename(u)
-            const fnNorm = normalize(fn)
-            const fnGerm = germanize(fn)
-            let matches = 0
-            for (const word of nameWordsNorm) {
-              if (fnNorm.includes(word) || fnGerm.includes(word)) matches++
-            }
-            for (const word of nameWordsGerm) {
-              if (fnNorm.includes(word) || fnGerm.includes(word)) matches++
-            }
-            return Math.min(matches, nameWordsNorm.length)
-          }
-
-          const bestMatchCount = getFilenameMatchCount(pickedUrl)
-          const betterCandidate = result.logoCandidates
-            .filter(c => !isThirdParty(c.url) && !isLikelyPhoto(c.url) && c.score >= 40)
-            .map(c => ({ ...c, nameMatches: getFilenameMatchCount(c.url) }))
-            .filter(c => c.nameMatches >= 2 && c.nameMatches > bestMatchCount)
-            .sort((a, b) => b.nameMatches - a.nameMatches || b.score - a.score)[0]
-
-          if (betterCandidate) {
-            console.log(`[Scrape] Logo override: ${getFilename(betterCandidate.url)} (${betterCandidate.nameMatches} name matches)`)
-            pickedUrl = betterCandidate.url
-          }
-        }
 
         if (pickedUrl) {
           try {

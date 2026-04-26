@@ -20,12 +20,12 @@ export async function captureWebsite(url: string): Promise<Buffer | null> {
     delay: '5',
   })
 
-  if (desktop && desktop.length > 50000) {
+  if (desktop && desktop.length > 30000) {
     console.log(`[Screenshot] Captured ${url} → ${(desktop.length / 1024).toFixed(0)}KB (desktop 1440×900)`)
     return desktop
   }
 
-  console.log(`[Screenshot] Desktop too small (${desktop?.length || 0}B), retrying mobile...`)
+  console.log(`[Screenshot] Desktop too small (${desktop?.length || 0}B < 30KB), retrying mobile...`)
 
   // Retry with mobile viewport (SPAs often render mobile better)
   const mobile = await takeScreenshot(accessKey, url, {
@@ -35,12 +35,12 @@ export async function captureWebsite(url: string): Promise<Buffer | null> {
     device_scale_factor: '2',
   })
 
-  if (mobile && mobile.length > 50000) {
+  if (mobile && mobile.length > 30000) {
     console.log(`[Screenshot] Captured ${url} → ${(mobile.length / 1024).toFixed(0)}KB (mobile 390×844 @2x)`)
     return mobile
   }
 
-  console.log(`[Screenshot] Mobile also too small (${mobile?.length || 0}B), retrying with reduced blocking...`)
+  console.log(`[Screenshot] Mobile also too small (${mobile?.length || 0}B < 30KB), retrying with reduced blocking...`)
 
   // Last attempt: no blocking (some sites need cookie banners to render)
   const noBlock = await takeScreenshot(accessKey, url, {

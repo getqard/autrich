@@ -184,7 +184,7 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
   // Best quality — runs when screenshot is available and good
   // ═══════════════════════════════════════════════════════════
 
-  const screenshotOk = headerScreenshot && headerScreenshot.length > 50000
+  const screenshotOk = headerScreenshot && headerScreenshot.length > 30000
 
   if (rasterLogo && screenshotOk) {
     try {
@@ -293,7 +293,7 @@ export async function determinePassColors(input: PassColorInput): Promise<PassCo
       log(`Vision-AI ERROR: ${err instanceof Error ? err.message : err} → trying Text-AI`)
     }
   } else {
-    const reason = !rasterLogo ? 'no logo' : !headerScreenshot ? 'no screenshot' : `screenshot too small (${headerScreenshot.length}B < 50KB)`
+    const reason = !rasterLogo ? 'no logo' : !headerScreenshot ? 'no screenshot' : `screenshot too small (${headerScreenshot.length}B < 30KB)`
     log(`Vision-AI skipped: ${reason} → trying Text-AI`)
   }
 
