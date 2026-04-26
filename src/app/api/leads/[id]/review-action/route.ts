@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { addLeadEmailToBlacklist } from '@/lib/leads/blacklist'
 import type { EmailStrategy } from '@/lib/supabase/types'
 
 /**
@@ -71,6 +72,7 @@ export async function POST(
       await supabase.from('leads').update({
         pipeline_status: 'blacklisted',
       }).eq('id', id)
+      await addLeadEmailToBlacklist(supabase, id, 'rejected_in_final_review')
 
       return NextResponse.json({ success: true, action: 'reject' })
     }

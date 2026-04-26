@@ -6,7 +6,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Upload, Loader2, CheckCircle2, XCircle,
   AlertTriangle, FileSpreadsheet, Users, Play, Square,
-  Zap, ClipboardCheck, Filter, Layers, Search
+  Zap, ClipboardCheck, Filter, Layers, Search, Download,
 } from 'lucide-react'
 
 type CampaignDetail = {
@@ -239,12 +239,21 @@ export default function CampaignDetailPage() {
             <Search size={16} /> Mit Scraping befüllen
           </Link>
           {campaign.total_leads > 0 && (
-            <Link
-              href={`/leads?campaign_id=${campaign.id}`}
-              className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 transition-colors"
-            >
-              <Users size={16} /> Leads ansehen
-            </Link>
+            <>
+              <Link
+                href={`/leads?campaign_id=${campaign.id}`}
+                className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 transition-colors"
+              >
+                <Users size={16} /> Leads ansehen
+              </Link>
+              <a
+                href={`/api/leads/export?campaign_id=${campaign.id}&format=xlsx`}
+                className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 rounded-lg text-sm hover:bg-zinc-700 transition-colors"
+                title="Alle Leads dieser Kampagne als Excel"
+              >
+                <Download size={16} /> Export
+              </a>
+            </>
           )}
         </div>
       </div>

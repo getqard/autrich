@@ -1,11 +1,13 @@
 /**
- * Pipeline Step Definitions
+ * Pipeline Step Definitions — URL-basierte Tool-Pipeline
  *
- * Each step in the enrichment pipeline is defined here.
- * Steps marked 'available' can be executed. Steps marked 'not_built'
- * show a "Coming Soon" placeholder in the UI.
+ * Diese Liste beschreibt die URL-basierten Enrichment-Schritte, die im
+ * Dev-Tool unter `/tools/pipeline` Schritt für Schritt ausgeführt werden.
+ * Aufruf-Endpoint: POST /api/pipeline/run-step.
  *
- * When building a new phase, just change status to 'available'.
+ * Lead-basierte Schritte (pass, mockup, email) werden NICHT hier gelistet —
+ * die brauchen einen DB-Lead und laufen über `lib/pipeline/run-single-lead.ts`
+ * (Phase A: enrichment, Phase B: pass/email/mockup).
  */
 
 export type PipelineStepStatus = 'available' | 'not_built'
@@ -68,50 +70,8 @@ export const PIPELINE_STEPS: PipelineStepDefinition[] = [
     endpoint: '/api/pipeline/run-step',
     dependsOn: ['classify', 'colors'],
   },
-  {
-    id: 'pass',
-    name: 'Pass Generation',
-    description: 'Generiert Apple .pkpass + Google Wallet Save URL',
-    phase: 5,
-    status: 'available',
-    endpoint: '/api/pipeline/run-step',
-    dependsOn: ['logo', 'colors', 'strip'],
-  },
-  {
-    id: 'preview',
-    name: 'iPhone Preview',
-    description: 'Generiert iPhone Mockup PNG mit dem fertigen Pass',
-    phase: 7,
-    status: 'not_built',
-    endpoint: null,
-    dependsOn: ['pass'],
-  },
-  {
-    id: 'email',
-    name: 'Email Generation',
-    description: 'Schreibt personalisierte Cold Email mit AI',
-    phase: 8,
-    status: 'not_built',
-    endpoint: null,
-    dependsOn: ['classify', 'preview'],
-  },
 ]
 
-/**
- * Get all steps up to and including the first not_built step.
- */
-export function getAvailableSteps(): PipelineStepDefinition[] {
-  const available: PipelineStepDefinition[] = []
-  for (const step of PIPELINE_STEPS) {
-    available.push(step)
-    if (step.status === 'not_built') break
-  }
-  return available
-}
-
-/**
- * Get only the runnable steps.
- */
 export function getRunnableSteps(): PipelineStepDefinition[] {
-  return PIPELINE_STEPS.filter(s => s.status === 'available')
+  return PIPELINE_STEPS.filter((s) => s.status === 'available')
 }

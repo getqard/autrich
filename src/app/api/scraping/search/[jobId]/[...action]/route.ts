@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getTaskStatus, getTaskResults, abortTask, mapPlaceToRawResult } from '@/lib/scraping/gmaps-client'
+import { markChainDuplicates } from '@/lib/scraping/domain-utils'
 
 async function getJob(jobId: string) {
   const supabase = createServiceClient()
@@ -174,7 +175,18 @@ export async function POST(
     try {
       const { results } = await getTaskResults(job.gmaps_task_id)
       const supabase = createServiceClient()
-      const rawResults = results.map((place: Record<string, unknown>) => mapPlaceToRawResult(place, jobId))
+
+      // Quality-Filter aus dem Job durchreichen, damit `passes_filter` korrekt
+      // gesetzt wird (vorher: immer true). Bei fehlenden Werten fällt der Check
+      // auf `true` zurück — dann sieht der User alle Resultate in der Liste.
+      const qualityFilter = (job.quality_filter || undefined) as Parameters<typeof mapPlaceToRawResult>[2]
+      const rawResults = results.map((place: Record<string, unknown>) =>
+        mapPlaceToRawResult(place as Parameters<typeof mapPlaceToRawResult>[0], jobId, qualityFilter)
+      )
+
+      // Ketten-Erkennung: gleicher Domain → nur die erste Filiale (höchste Reviews)
+      // bleibt `passes_filter=true`, alle weiteren werden als chain-duplicates markiert.
+      const chainDuplicates = markChainDuplicates(rawResults)
 
       if (rawResults.length > 0) {
         const { error: insertErr } = await supabase.from('scrape_results_raw').insert(rawResults)
@@ -185,7 +197,11 @@ export async function POST(
         status: 'completed', results_count: rawResults.length,
       }).eq('id', jobId)
 
-      return NextResponse.json({ stored: rawResults.length, status: 'completed' })
+      return NextResponse.json({
+        stored: rawResults.length,
+        chain_duplicates: chainDuplicates,
+        status: 'completed',
+      })
     } catch (err) {
       return NextResponse.json({ error: err instanceof Error ? err.message : 'Failed' }, { status: 500 })
     }
@@ -234,6 +250,14 @@ export async function POST(
         })
         .filter(Boolean)
     )
+
+    // Blacklist-Tabelle laden — abgelehnte Leads sollen NIE wieder reinkommen,
+    // auch wenn ihr alter leads-Row bereits gelöscht wurde.
+    const { data: blacklistRows } = await supabase.from('blacklist').select('email')
+    const blacklistedEmails = new Set(
+      (blacklistRows || []).map((b) => b.email?.toLowerCase()).filter(Boolean)
+    )
+
     // Track names within this batch too (franchise dedup)
     const batchNames = new Set<string>()
     const batchPlaceIds = new Set<string>()
@@ -243,6 +267,7 @@ export async function POST(
     let skipped = 0
     let skippedDuplicates = 0
     let skippedMissingContact = 0
+    let skippedBlacklisted = 0
     const errors: string[] = []
 
     for (const raw of resultsToImport) {
@@ -288,6 +313,13 @@ export async function POST(
         if (!lead.website_url && !lead.email && !lead.phone) {
           skipped++
           skippedMissingContact++
+          continue
+        }
+
+        // Skip if email is on the blacklist (rejected previously / opted-out)
+        if (lead.email && blacklistedEmails.has(lead.email.toLowerCase())) {
+          skipped++
+          skippedBlacklisted++
           continue
         }
 
@@ -347,6 +379,7 @@ export async function POST(
       skipped,
       skipped_duplicates: skippedDuplicates,
       skipped_missing_contact: skippedMissingContact,
+      skipped_blacklisted: skippedBlacklisted,
       duplicates: skippedDuplicates,
       errors,
       total: resultsToImport.length,

@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { Loader2, Search, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react'
+import { Loader2, Search, ChevronLeft, ChevronRight, ExternalLink, Download } from 'lucide-react'
 import type { Lead, PipelineStatus } from '@/lib/supabase/types'
 import { INDUSTRIES } from '@/data/industries-seed'
 
@@ -79,7 +79,7 @@ function LeadsContent() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3 mb-6">
+      <div className="flex gap-3 mb-6 items-center">
         <div className="relative flex-1 max-w-md">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
           <input
@@ -106,6 +106,12 @@ function LeadsContent() {
           <option value="lost">Lost</option>
           <option value="blacklisted">Blacklisted</option>
         </select>
+
+        <ExportButton
+          campaignId={campaignFilter}
+          pipelineStatus={pipelineFilter || undefined}
+          search={search || undefined}
+        />
       </div>
 
       {/* Table */}
@@ -215,6 +221,62 @@ function LeadsContent() {
               </div>
             </div>
           )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function ExportButton({
+  campaignId,
+  pipelineStatus,
+  triageStatus,
+  search,
+}: {
+  campaignId?: string | null
+  pipelineStatus?: string
+  triageStatus?: string
+  search?: string
+}) {
+  const [open, setOpen] = useState(false)
+
+  function buildUrl(format: 'csv' | 'xlsx') {
+    const params = new URLSearchParams()
+    if (campaignId) params.set('campaign_id', campaignId)
+    if (pipelineStatus) params.set('pipeline_status', pipelineStatus)
+    if (triageStatus) params.set('triage_status', triageStatus)
+    if (search) params.set('search', search)
+    params.set('format', format)
+    return `/api/leads/export?${params}`
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 px-3 py-2.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-lg text-sm"
+      >
+        <Download size={14} /> Export
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 w-44 bg-zinc-900 border border-zinc-700 rounded-lg shadow-lg z-20 overflow-hidden">
+            <a
+              href={buildUrl('csv')}
+              onClick={() => setOpen(false)}
+              className="block px-3 py-2 text-sm hover:bg-zinc-800"
+            >
+              Als CSV (.csv)
+            </a>
+            <a
+              href={buildUrl('xlsx')}
+              onClick={() => setOpen(false)}
+              className="block px-3 py-2 text-sm hover:bg-zinc-800 border-t border-zinc-800"
+            >
+              Als Excel (.xlsx)
+            </a>
+          </div>
         </>
       )}
     </div>

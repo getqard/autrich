@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { addLeadEmailToBlacklist } from '@/lib/leads/blacklist'
 
 /**
  * POST /api/leads/[id]/enrichment-review-action
@@ -31,6 +32,7 @@ export async function POST(
     case 'reject':
       updateData.enrichment_review_status = 'rejected'
       updateData.pipeline_status = 'blacklisted'
+      await addLeadEmailToBlacklist(supabase, id, 'rejected_in_enrichment_review')
       break
     case 'skip':
       // No DB change — Lead bleibt 'pending' und kommt beim nächsten Review-Run wieder.

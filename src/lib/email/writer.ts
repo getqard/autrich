@@ -77,20 +77,49 @@ Stelle eine provokante Frage oder Aussage. Nicht beleidigend, aber zum Nachdenke
 Subject macht stutzig.`,
 }
 
+// ─── Text-Cleaning Helpers ──────────────────────────────────────
+
+/**
+ * Replaces every kind of dash that screams "AI-written" with natural punctuation.
+ * Catches: em-dash (—), en-dash (–), double-hyphen (--), spaced hyphen ( - ),
+ * then collapses double punctuation and stray whitespace.
+ */
+export function stripDashes(text: string, mode: 'subject' | 'body'): string {
+  const rep = mode === 'subject' ? ', ' : '. '
+  return text
+    .replace(/\s*[—–]\s*/g, rep)
+    .replace(/\s+-{2,}\s+/g, rep)
+    .replace(/\s+-\s+/g, rep)
+    .replace(/(\.\s*){2,}/g, '. ')
+    .replace(/(,\s*){2,}/g, ', ')
+    .replace(/\s+([.,!?:;])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+/** Strip any "Lano Aziz" the AI might have invented — only "Lano" allowed in body. */
+export function enforceFirstNameOnly(body: string): string {
+  return body.replace(/Lano\s+Aziz/g, 'Lano')
+}
+
 // ─── Email Generation ───────────────────────────────────────────
 
 export async function writeEmail(input: EmailInput): Promise<EmailOutput> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
 
-  const formal = input.formal ?? false
+  // Auto-Formal-Logik (Lano-Regel: nur Vorname → du, nur Nachname → Sie).
+  // Wenn `formal` explizit gesetzt ist, respektieren. Sonst aus Namen ableiten.
+  const firstName = input.contact_first_name?.trim() || null
+  const lastName = input.contact_last_name?.trim() || null
+  const formal = input.formal ?? (Boolean(lastName) && !firstName)
 
   // Build greeting
   let greeting: string
-  if (input.contact_first_name && !formal) {
-    greeting = `Beginne mit "Hey ${input.contact_first_name},"`
-  } else if (input.contact_last_name && formal) {
-    greeting = `Beginne mit "Sehr geehrter Herr ${input.contact_last_name},"`
+  if (firstName && !formal) {
+    greeting = `Beginne mit "Hey ${firstName},"`
+  } else if (lastName && formal) {
+    greeting = `Beginne mit "Sehr geehrter Herr ${lastName},"`
   } else if (formal) {
     greeting = 'Beginne mit "Guten Tag,"'
   } else {
@@ -178,9 +207,10 @@ Antworte NUR mit JSON: {"subject": "...", "body": "..."}`
   let subject = parsed.subject || ''
   let body = parsed.body || ''
 
-  // Post-processing: remove any dashes the AI might have snuck in
-  subject = subject.replace(/[—–]/g, ',')
-  body = body.replace(/[—–]/g, '.')
+  // Post-processing: alle AI-Tells rauspatchen
+  subject = stripDashes(subject, 'subject')
+  body = stripDashes(body, 'body')
+  body = enforceFirstNameOnly(body)
 
   // Count tokens + cost
   const tokensIn = response.usage.input_tokens

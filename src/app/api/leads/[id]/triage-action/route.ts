@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { addLeadEmailToBlacklist } from '@/lib/leads/blacklist'
 
 /**
  * POST /api/leads/[id]/triage-action
@@ -35,6 +36,7 @@ export async function POST(
   } else if (body.action === 'reject') {
     updateData.triage_status = 'rejected'
     updateData.pipeline_status = 'blacklisted'
+    await addLeadEmailToBlacklist(supabase, id, 'rejected_in_triage')
   } else if (body.action === 'skip') {
     // No DB change — Lead bleibt auf 'pending' und kommt beim nächsten Triage-Run wieder.
     return NextResponse.json({ success: true, action: 'skip' })

@@ -15,6 +15,14 @@ export type ImpressumResult = {
   firstName: string | null
   lastName: string | null
   foundingYear: number | null
+  /** Most-likely contact email from impressum (info@/kontakt@/owner-name@). */
+  email: string | null
+  /** Phone in raw form as found (+49 …, 0049 …, 030 …). */
+  phone: string | null
+  /** Street name + house number (e.g. "Musterstraße 12"). */
+  street: string | null
+  postalCode: string | null
+  city: string | null
   source: string | null
 }
 
@@ -110,6 +118,62 @@ function cleanName(raw: string): { full: string; first: string; last: string } |
   return { full, first, last }
 }
 
+/** Extract first plausible contact email from text. */
+function extractEmail(text: string, websiteHost: string | null): string | null {
+  // Email regex (kein anchor, keine Captures außer Match)
+  const matches = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g)
+  if (!matches?.length) return null
+
+  // Prio 1: Email mit Host der Website (zeigt: das ist ihr offizieller Channel)
+  if (websiteHost) {
+    const root = websiteHost.replace(/^www\./i, '').toLowerCase()
+    const sameDomain = matches.find((m) => m.toLowerCase().endsWith('@' + root) || m.toLowerCase().includes('@' + root.replace(/\..+$/, '.')))
+    if (sameDomain) return sameDomain.toLowerCase()
+  }
+
+  // Prio 2: typische Generic-Adressen
+  const generic = matches.find((m) => /^(info|kontakt|hello|mail|office|service)@/i.test(m))
+  if (generic) return generic.toLowerCase()
+
+  // Prio 3: irgendeine, aber Junk-Adressen filtern (sentry, cloudflare, support@stripe etc.)
+  const junkHosts = /sentry\.io|stripe\.com|cloudflare\.com|google\.com|gmail\.com|googlemail\.com|wixsite\.com|wordpress\.com/i
+  const usable = matches.find((m) => !junkHosts.test(m))
+  return usable ? usable.toLowerCase() : null
+}
+
+/** Extract first phone-like number (German formats). */
+function extractPhone(text: string): string | null {
+  // Patterns: +49 30 1234567, 0049 30 1234567, 030 1234567, (030) 1234567, 030-1234567
+  const phoneRegex = /(?:\+49|0049|0)\s*\(?\d{2,5}\)?[\s\-/]*\d{3,}[\s\-/]*\d{2,}/g
+  const matches = text.match(phoneRegex)
+  if (!matches?.length) return null
+  // Pick the first whose digit count is plausible (≥7 digits, ≤15)
+  for (const m of matches) {
+    const digits = m.replace(/\D/g, '')
+    if (digits.length >= 7 && digits.length <= 15) {
+      return m.replace(/\s+/g, ' ').trim()
+    }
+  }
+  return null
+}
+
+/** Extract postal address. Returns first plausible street + PLZ + city block. */
+function extractAddress(text: string): { street: string | null; postalCode: string | null; city: string | null } {
+  // Street: Wort(e) + Hausnummer (z.B. "Musterstraße 12", "Am Markt 3a")
+  const streetRegex = /\b([A-ZÄÖÜ][a-zäöüß]+(?:[\s-][A-ZÄÖÜ][a-zäöüß]+)?(?:str(?:aße|\.)?|gasse|weg|allee|platz|ring|damm|ufer|chaussee))\s+(\d+\s?[a-zA-Z]?)\b/
+  const streetMatch = text.match(streetRegex)
+
+  // PLZ + Stadt: 5 Ziffern + Stadt-Wort
+  const plzCityRegex = /\b(\d{5})\s+([A-ZÄÖÜ][a-zäöüß]+(?:[\s-][A-ZÄÖÜ][a-zäöüß]+)?)/
+  const plzCityMatch = text.match(plzCityRegex)
+
+  return {
+    street: streetMatch ? `${streetMatch[1]} ${streetMatch[2]}` : null,
+    postalCode: plzCityMatch?.[1] || null,
+    city: plzCityMatch?.[2] || null,
+  }
+}
+
 /**
  * Extract founding year from text.
  */
@@ -138,8 +202,17 @@ export async function scrapeImpressum(
     firstName: null,
     lastName: null,
     foundingYear: null,
+    email: null,
+    phone: null,
+    street: null,
+    postalCode: null,
+    city: null,
     source: null,
   }
+
+  // Website-Host für Email-Domain-Match
+  let websiteHost: string | null = null
+  try { websiteHost = new URL(baseUrl).hostname } catch { /* ignore */ }
 
   // First try to extract founding year from homepage
   const homepageText = cheerio.load(homepageHtml).text()
@@ -182,6 +255,14 @@ export async function scrapeImpressum(
     if (!result.foundingYear) {
       result.foundingYear = extractFoundingYear(pageText)
     }
+
+    // Email / Phone / Address — alle aus Impressum-Text
+    result.email = extractEmail(pageText, websiteHost)
+    result.phone = extractPhone(pageText)
+    const address = extractAddress(pageText)
+    result.street = address.street
+    result.postalCode = address.postalCode
+    result.city = address.city
 
     // First try regex patterns (fast, $0)
     const lines = pageText.split('\n').map(l => l.trim()).filter(Boolean)

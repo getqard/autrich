@@ -97,7 +97,7 @@ REGELN:
 - detected_pass_title: "Treuekarte", "Stempelkarte" oder "Bonuskarte"
 - detected_max_stamps: 8-12 je nach Branche (häufige Besuche = weniger Stempel)
 - strip_prompt: Englisch, für AI Image Generation, beschreibt das Business visuell
-- email_hooks: 3 verschiedene Angles auf Deutsch, personalisiert mit den echten Daten
+- email_hooks: 3 verschiedene Angles auf Deutsch, personalisiert mit den echten Daten. NIEMALS Gedankenstriche (— oder –) in den Hooks. Stattdessen Komma oder Punkt.
 - personalization_notes: Kurze Notiz was bei diesem Business besonders ist
 
 Antworte NUR mit dem JSON, kein Text davor oder danach.`
@@ -181,7 +181,7 @@ function creativeContentFallback(
     email_hooks: [
       `${data.business_name} könnte mit einer digitalen Stempelkarte mehr Stammkunden gewinnen.`,
       `In ${data.city || 'der Stadt'} setzen immer mehr Geschäfte auf digitale Kundenbindung.`,
-      `Eine Treuekarte direkt im Wallet — kein Drucken, kein Vergessen.`,
+      `Eine Treuekarte direkt im Wallet, kein Drucken, kein Vergessen.`,
     ],
     personalization_notes: `Fallback-Inhalte (kein AI). Branche: ${matched.name}`,
     tokens_in: 0,
@@ -227,7 +227,7 @@ REGELN:
 - detected_pass_title: "Treuekarte", "Stempelkarte" oder "Bonuskarte"
 - detected_max_stamps: 8-12 je nach Branche (häufige Besuche = weniger Stempel)
 - strip_prompt: Englisch, für AI Image Generation, beschreibt das Business visuell
-- email_hooks: 3 verschiedene Angles auf Deutsch, personalisiert mit den echten Daten des Business
+- email_hooks: 3 verschiedene Angles auf Deutsch, personalisiert mit den echten Daten. NIEMALS Gedankenstriche (— oder –) in den Hooks. Stattdessen Komma oder Punkt. des Business
 - personalization_notes: Kurze Notiz was bei diesem Business besonders ist
 
 Antworte NUR mit dem JSON, kein Text davor oder danach.`
@@ -324,7 +324,7 @@ function keywordFallback(data: ClassifyInput, start: number): ClassificationResu
     email_hooks: [
       `${data.business_name} könnte mit einer digitalen Stempelkarte mehr Stammkunden gewinnen.`,
       `In ${data.city || 'der Stadt'} setzen immer mehr Geschäfte auf digitale Kundenbindung.`,
-      `Eine Treuekarte direkt im Wallet — kein Drucken, kein Vergessen.`,
+      `Eine Treuekarte direkt im Wallet, kein Drucken, kein Vergessen.`,
     ],
     personalization_notes: `Keyword-basierte Klassifizierung (kein AI). Branche: ${matchedIndustry.name}`,
     tokens_in: 0,

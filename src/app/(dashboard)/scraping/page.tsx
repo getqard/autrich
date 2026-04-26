@@ -65,9 +65,10 @@ function ScrapingPageInner() {
   const [maxResults, setMaxResults] = useState('')
   const [extractionMethod, setExtractionMethod] = useState('fast')
 
-  // Filters
-  const [minRating, setMinRating] = useState('3.5')
-  const [minReviews, setMinReviews] = useState('10')
+  // Filters — Defaults laut MASTERPLAN: ≥4.5★ und ≥200 Reviews (Lano-Vorgabe).
+  // Wer weichere Kampagnen will, kann manuell runter setzen.
+  const [minRating, setMinRating] = useState('4.5')
+  const [minReviews, setMinReviews] = useState('200')
   const [hasWebsite, setHasWebsite] = useState(true)
   const [hasPhone, setHasPhone] = useState(false)
   const [enableEnrichment, setEnableEnrichment] = useState(false)
