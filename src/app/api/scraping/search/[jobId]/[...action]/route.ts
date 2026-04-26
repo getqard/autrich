@@ -376,15 +376,27 @@ export async function POST(
 
     // Campaign total_leads neu berechnen (echter COUNT statt += imported,
     // damit Wert auch nach manuellem Löschen / Re-Import konsistent bleibt).
-    if (campaignId && imported > 0) {
+    let campaignName: string | null = null
+    let totalLeadsAfter: number | null = null
+    if (campaignId) {
       const { count } = await supabase
         .from('leads')
         .select('id', { count: 'exact', head: true })
         .eq('campaign_id', campaignId)
       if (typeof count === 'number') {
+        totalLeadsAfter = count
         await supabase.from('campaigns').update({ total_leads: count }).eq('id', campaignId)
       }
+      // Campaign-Namen für Frontend-Bestätigung
+      const { data: camp } = await supabase
+        .from('campaigns')
+        .select('name')
+        .eq('id', campaignId)
+        .single()
+      campaignName = camp?.name || null
     }
+
+    console.log(`[Scraping/Import] job=${jobId} campaign=${campaignId || 'NONE'} imported=${imported} skipped=${skipped} totalAfter=${totalLeadsAfter}`)
 
     return NextResponse.json({
       imported,
@@ -395,6 +407,8 @@ export async function POST(
       skipped_blacklisted: skippedBlacklisted,
       duplicates: skippedDuplicates,
       campaign_id: campaignId || null,
+      campaign_name: campaignName,
+      total_leads_after: totalLeadsAfter,
       errors,
       total: resultsToImport.length,
     })

@@ -83,6 +83,9 @@ function ScrapingPageInner() {
     importedWithoutEmail: number
     skippedDuplicates: number
     skippedMissingContact: number
+    campaignId: string | null
+    campaignName: string | null
+    totalLeadsAfter: number | null
   } | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
 
@@ -263,10 +266,12 @@ function ScrapingPageInner() {
       })
   }, [])
 
+  // Tracking ob die Campaign-Auswahl aus der URL kam — damit wir den Selector
+  // sperren und der User nicht versehentlich auf "Globaler Pool" zurückwechselt.
+  const urlCampaignId = searchParams.get('campaign_id')
   useEffect(() => {
-    const campaignId = searchParams.get('campaign_id')
-    if (campaignId) setSelectedCampaignId(campaignId)
-  }, [searchParams])
+    if (urlCampaignId) setSelectedCampaignId(urlCampaignId)
+  }, [urlCampaignId])
 
   // --- Reconnect on page load ---
   useEffect(() => {
@@ -414,6 +419,9 @@ function ScrapingPageInner() {
           importedWithoutEmail: data.imported_without_email || 0,
           skippedDuplicates: data.skipped_duplicates || data.duplicates || 0,
           skippedMissingContact: data.skipped_missing_contact || 0,
+          campaignId: data.campaign_id || null,
+          campaignName: data.campaign_name || null,
+          totalLeadsAfter: data.total_leads_after ?? null,
         })
         await loadResults(state.jobId)
         setSelected(new Set())
@@ -421,7 +429,7 @@ function ScrapingPageInner() {
         // Wenn Import in eine Campaign ging und Leads tatsächlich landeten:
         // direkt zurück zur Kampagne, damit der User seine Leads sofort sieht.
         if (data.campaign_id && (data.imported || 0) > 0) {
-          setTimeout(() => router.push(`/campaigns/${data.campaign_id}`), 1200)
+          setTimeout(() => router.push(`/campaigns/${data.campaign_id}`), 1500)
         }
       } else {
         alert(`Import fehlgeschlagen: ${data.error}`)
@@ -467,12 +475,14 @@ function ScrapingPageInner() {
             Import-Ziel: <strong className="text-white">{targetCampaign.name}</strong>
             <span className="text-zinc-500"> · gefundene Leads landen direkt in dieser Kampagne</span>
           </span>
-          <button
-            onClick={() => setSelectedCampaignId('')}
-            className="text-xs text-zinc-500 hover:text-white"
-          >
-            Andere wählen
-          </button>
+          {!urlCampaignId && (
+            <button
+              onClick={() => setSelectedCampaignId('')}
+              className="text-xs text-zinc-500 hover:text-white"
+            >
+              Andere wählen
+            </button>
+          )}
         </div>
       )}
 
@@ -480,11 +490,14 @@ function ScrapingPageInner() {
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 mb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <div>
-            <label className="block text-xs text-zinc-500 mb-1.5">Kampagne</label>
+            <label className="block text-xs text-zinc-500 mb-1.5">
+              Kampagne {urlCampaignId && <span className="text-blue-400">(durch Link festgelegt)</span>}
+            </label>
             <select
               value={selectedCampaignId}
               onChange={(e) => setSelectedCampaignId(e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+              disabled={!!urlCampaignId}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-white/20 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <option value="">Globaler Lead-Pool (ohne Kampagne)</option>
               {campaigns.map((campaign) => (
@@ -706,15 +719,38 @@ function ScrapingPageInner() {
 
       {/* Import Result */}
       {importResult && (
-        <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4 mb-4 flex items-center gap-3">
-          <CheckCircle2 size={18} className="text-green-400" />
-          <p className="text-sm text-green-400">
-            {importResult.imported} Leads importiert
-            {importResult.importedWithoutEmail > 0 && ` · ${importResult.importedWithoutEmail} ohne E-Mail`}
-            {importResult.skippedDuplicates > 0 && ` · ${importResult.skippedDuplicates} Duplikate`}
-            {importResult.skippedMissingContact > 0 && ` · ${importResult.skippedMissingContact} ohne Kontakt/Website`}
-            {importResult.skipped > 0 && importResult.skippedDuplicates === 0 && importResult.skippedMissingContact === 0 && ` · ${importResult.skipped} übersprungen`}
-          </p>
+        <div className={`rounded-xl p-4 mb-4 border ${
+          importResult.campaignId
+            ? 'bg-green-500/10 border-green-500/30'
+            : importResult.imported > 0
+              ? 'bg-amber-500/10 border-amber-500/30'
+              : 'bg-zinc-800 border-zinc-700'
+        }`}>
+          <div className="flex items-start gap-3">
+            <CheckCircle2 size={18} className={importResult.campaignId ? 'text-green-400 mt-0.5' : 'text-amber-400 mt-0.5'} />
+            <div className="flex-1">
+              <p className={`text-sm font-medium ${importResult.campaignId ? 'text-green-300' : 'text-amber-300'}`}>
+                {importResult.imported} Leads importiert
+                {importResult.campaignName && ` in Kampagne "${importResult.campaignName}"`}
+                {!importResult.campaignId && importResult.imported > 0 && ' in Globalen Lead-Pool (keine Kampagne ausgewählt!)'}
+              </p>
+              <p className="text-xs text-zinc-400 mt-1">
+                {importResult.importedWithoutEmail > 0 && `${importResult.importedWithoutEmail} ohne E-Mail · `}
+                {importResult.skippedDuplicates > 0 && `${importResult.skippedDuplicates} Duplikate · `}
+                {importResult.skippedMissingContact > 0 && `${importResult.skippedMissingContact} ohne Kontakt/Website · `}
+                {importResult.totalLeadsAfter !== null && `Kampagne hat jetzt ${importResult.totalLeadsAfter} Leads gesamt`}
+              </p>
+              {importResult.campaignId && importResult.imported > 0 && (
+                <p className="text-xs text-zinc-500 mt-1">→ Du wirst gleich zur Kampagne weitergeleitet…</p>
+              )}
+              {!importResult.campaignId && importResult.imported > 0 && (
+                <p className="text-xs text-amber-400 mt-1">
+                  ⚠ Diese Leads sind nicht mit einer Kampagne verknüpft. Falls du das wolltest:
+                  oben Kampagne auswählen und nochmal importieren (oder Leads manuell zuweisen).
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
