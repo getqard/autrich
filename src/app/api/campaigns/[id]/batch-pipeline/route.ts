@@ -142,14 +142,56 @@ export async function POST(
 
   // Totals über beide Phasen
   if (action === 'start' || progress.status === 'idle' || progress.status === 'completed') {
-    const [{ count: enrichPending }, { count: passEmailPending }] = await Promise.all([
+    const [{ count: enrichPending }, { count: passEmailPending }, { count: awaitingTriageCount }, { count: awaitingER }] = await Promise.all([
       supabase.from('leads').select('id', { count: 'exact', head: true })
         .eq('campaign_id', id).eq('triage_status', 'approved').eq('enrichment_status', 'pending')
         .not('website_url', 'is', null),
       supabase.from('leads').select('id', { count: 'exact', head: true })
         .eq('campaign_id', id).eq('enrichment_review_status', 'approved').eq('pass_status', 'pending'),
+      supabase.from('leads').select('id', { count: 'exact', head: true })
+        .eq('campaign_id', id).eq('triage_status', 'pending'),
+      supabase.from('leads').select('id', { count: 'exact', head: true })
+        .eq('campaign_id', id).eq('enrichment_status', 'completed').eq('enrichment_review_status', 'pending'),
     ])
     const totalPending = (enrichPending || 0) + (passEmailPending || 0)
+
+    // Wenn nichts in der Pipeline-Queue, aber noch Leads in Stage 1/2 hängen,
+    // klar erklären statt stillschweigend "0 erfolgreich" zu zeigen.
+    if (totalPending === 0) {
+      const blockers: string[] = []
+      if ((awaitingTriageCount || 0) > 0) {
+        blockers.push(`${awaitingTriageCount} Lead${awaitingTriageCount === 1 ? '' : 's'} in Stage 1 (Triage) — du musst sie erst dort approven`)
+      }
+      if ((awaitingER || 0) > 0) {
+        blockers.push(`${awaitingER} Lead${awaitingER === 1 ? '' : 's'} in Stage 2 (Enrichment-Review) — du musst sie erst dort approven`)
+      }
+      if (blockers.length > 0) {
+        return NextResponse.json({
+          error: 'Keine Leads in Pipeline-Queue',
+          reason: 'pending_in_swipe_stages',
+          blockers,
+          hint: 'Pipeline arbeitet nur mit Leads die durch Triage + Enrichment-Review freigegeben sind. Geh die offenen Stages durch.',
+          counts: {
+            awaiting_triage: awaitingTriageCount || 0,
+            awaiting_enrichment_review: awaitingER || 0,
+            enrichment_queue: enrichPending || 0,
+            pass_email_queue: passEmailPending || 0,
+          },
+        }, { status: 400 })
+      }
+      // Wenn auch nichts in den Stages hängt: einfach ack als completed
+      return NextResponse.json({
+        status: 'completed',
+        total: 0,
+        completed: 0,
+        failed: 0,
+        message: 'Keine offenen Leads — Kampagne ist durchgearbeitet.',
+        leads: {
+          total: 0, awaiting_triage: 0, enrichment_queue: 0,
+          awaiting_enrichment_review: 0, pass_email_queue: 0, ready_for_review: 0, pending: 0,
+        },
+      })
+    }
 
     progress.total = totalPending + progress.completed
     progress.completed = progress.status === 'completed' ? 0 : progress.completed

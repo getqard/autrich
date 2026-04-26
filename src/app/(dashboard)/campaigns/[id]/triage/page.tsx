@@ -10,9 +10,9 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Star, Globe, Phone, Instagram, MapPin, Clock, Pencil, Check } from 'lucide-react'
+import { Star, Globe, Phone, Instagram, MapPin, Clock, Pencil, Check, Zap, Loader2 } from 'lucide-react'
 import { SwipeBoard, SwipeAction } from '@/components/swipe/SwipeBoard'
 
 type TriageLead = {
@@ -46,12 +46,14 @@ type TriageLead = {
 
 export default function TriagePage() {
   const params = useParams()
+  const router = useRouter()
   const campaignId = params.id as string
 
   const [leads, setLeads] = useState<TriageLead[]>([])
   const [total, setTotal] = useState(0)
   const [currentIndex, setCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [bulkLoading, setBulkLoading] = useState(false)
 
   // Inline-Edit State (pro Lead)
   const [editing, setEditing] = useState<null | 'name' | 'website'>(null)
@@ -306,6 +308,28 @@ export default function TriagePage() {
     )
   }
 
+  async function bulkAction(action: 'approve_all' | 'reject_all') {
+    const verb = action === 'approve_all' ? 'approven' : 'ablehnen (Blacklist)'
+    if (!confirm(`Wirklich alle ${total} pending Leads ${verb}?`)) return
+    setBulkLoading(true)
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/triage-bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        alert(`${data.updated} Leads ${action === 'approve_all' ? 'approved' : 'blacklisted'}.`)
+        router.push(`/campaigns/${campaignId}`)
+      } else {
+        alert(`Fehler: ${data.error}`)
+      }
+    } finally {
+      setBulkLoading(false)
+    }
+  }
+
   if (!loading && leads.length === 0) {
     return (
       <div className="text-center py-20">
@@ -318,17 +342,44 @@ export default function TriagePage() {
   }
 
   return (
-    <SwipeBoard
-      campaignId={campaignId}
-      stageLabel="Triage"
-      leads={leads}
-      total={total}
-      loading={loading}
-      currentIndex={currentIndex}
-      onIndexChange={setCurrentIndex}
-      onLoadMore={loadLeads}
-      onAction={handleAction}
-      renderCard={renderCard}
-    />
+    <div>
+      {!loading && total > 1 && (
+        <div className="mb-4 px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-lg flex items-center justify-between gap-4">
+          <div className="text-xs text-zinc-500">
+            <span className="text-zinc-300 font-medium">Schnell-Aktionen:</span>{' '}
+            {total} Leads warten — wenn du keine Zeit für Einzel-Triage hast, kannst du alle auf einmal freigeben.
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => bulkAction('approve_all')}
+              disabled={bulkLoading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-600/20 hover:bg-green-600/30 text-green-300 rounded text-xs font-medium disabled:opacity-50"
+            >
+              {bulkLoading ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+              Alle {total} approven
+            </button>
+            <button
+              onClick={() => bulkAction('reject_all')}
+              disabled={bulkLoading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-300 rounded text-xs font-medium disabled:opacity-50"
+            >
+              Alle ablehnen
+            </button>
+          </div>
+        </div>
+      )}
+      <SwipeBoard
+        campaignId={campaignId}
+        stageLabel="Triage"
+        leads={leads}
+        total={total}
+        loading={loading}
+        currentIndex={currentIndex}
+        onIndexChange={setCurrentIndex}
+        onLoadMore={loadLeads}
+        onAction={handleAction}
+        renderCard={renderCard}
+      />
+    </div>
   )
 }

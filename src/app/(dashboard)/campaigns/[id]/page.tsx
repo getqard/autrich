@@ -117,7 +117,13 @@ export default function CampaignDetailPage() {
         body: JSON.stringify({ action: 'start' }),
       })
       const data = await res.json()
-      setBatchProgress(data)
+      if (!res.ok && data.reason === 'pending_in_swipe_stages') {
+        const blockerText = (data.blockers || []).join('\n• ')
+        alert(`Pipeline kann nicht starten:\n\n• ${blockerText}\n\n${data.hint || ''}`)
+        await loadBatchProgress()
+      } else {
+        setBatchProgress(data)
+      }
     } catch {
       // ignore
     }
@@ -623,33 +629,76 @@ export default function CampaignDetailPage() {
           )}
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-3">
-            {(!batchProgress || batchProgress.status === 'idle' || batchProgress.status === 'completed') && (
-              <button
-                onClick={startBatch}
-                disabled={batchLoading}
-                className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-              >
-                {batchLoading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-                {batchProgress?.status === 'completed' ? 'Nochmal starten' : 'Pipeline starten'}
-              </button>
-            )}
+          <div className="flex items-center gap-3 flex-wrap">
+            {(() => {
+              const queueEmpty = batchProgress?.leads
+                ? (batchProgress.leads.enrichment_queue ?? 0) === 0 &&
+                  (batchProgress.leads.pass_email_queue ?? 0) === 0
+                : false
+              const triageOpen = (batchProgress?.leads?.awaiting_triage ?? 0) > 0
+              const erOpen = (batchProgress?.leads?.awaiting_enrichment_review ?? 0) > 0
+              const isIdle = !batchProgress || batchProgress.status === 'idle' || batchProgress.status === 'completed'
 
-            {batchProgress?.status === 'running' && (
-              <button
-                onClick={stopBatch}
-                className="flex items-center gap-2 px-5 py-2.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg text-sm font-medium transition-colors"
-              >
-                <Square size={16} /> Stoppen
-              </button>
-            )}
+              if (!isIdle) {
+                return (
+                  <>
+                    {batchProgress?.status === 'running' && (
+                      <>
+                        <button
+                          onClick={stopBatch}
+                          className="flex items-center gap-2 px-5 py-2.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg text-sm font-medium"
+                        >
+                          <Square size={16} /> Stoppen
+                        </button>
+                        <div className="flex items-center gap-2 text-sm text-zinc-500">
+                          <Loader2 size={14} className="animate-spin" /> Wird verarbeitet...
+                        </div>
+                      </>
+                    )}
+                  </>
+                )
+              }
 
-            {batchProgress?.status === 'running' && (
-              <div className="flex items-center gap-2 text-sm text-zinc-500">
-                <Loader2 size={14} className="animate-spin" /> Wird verarbeitet...
-              </div>
-            )}
+              return (
+                <>
+                  <button
+                    onClick={startBatch}
+                    disabled={batchLoading || queueEmpty}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors disabled:bg-zinc-800 disabled:text-zinc-500 disabled:cursor-not-allowed"
+                    title={queueEmpty ? 'Keine Leads in der Pipeline-Queue — erst Triage / Enrichment-Review machen' : ''}
+                  >
+                    {batchLoading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+                    {batchProgress?.status === 'completed' ? 'Nochmal starten' : 'Pipeline starten'}
+                  </button>
 
+                  {queueEmpty && (triageOpen || erOpen) && (
+                    <div className="text-xs text-amber-400 max-w-md">
+                      Pipeline-Queue ist leer. Approve erst Leads in
+                      {triageOpen && (
+                        <>{' '}
+                          <Link href={`/campaigns/${id}/triage`} className="underline hover:text-white">
+                            Stage 1 ({batchProgress?.leads?.awaiting_triage ?? 0})
+                          </Link>
+                        </>
+                      )}
+                      {triageOpen && erOpen && ' bzw. '}
+                      {erOpen && (
+                        <Link href={`/campaigns/${id}/enrichment-review`} className="underline hover:text-white">
+                          Stage 2 ({batchProgress?.leads?.awaiting_enrichment_review ?? 0})
+                        </Link>
+                      )}
+                      .
+                    </div>
+                  )}
+
+                  {queueEmpty && !triageOpen && !erOpen && batchProgress?.status === 'completed' && (
+                    <div className="text-xs text-zinc-500">
+                      Alle Leads durchgearbeitet.
+                    </div>
+                  )}
+                </>
+              )
+            })()}
           </div>
         </div>
       )}
